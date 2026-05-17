@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import type { McpModelDef, McpServerOptions, ZenStackClientShape } from "../types.js";
+import type { McpModelDef, McpServerConfig, ZenStackClientShape } from "../types.js";
 import type { SchemaDef } from "@zenstackhq/schema";
 import type { AuthType } from "@zenstackhq/orm";
 import { getRequestUser } from "../context.js";
@@ -9,8 +9,8 @@ import { validateOperation, type ZodFactory } from "./validate.js";
 export function registerExecuteTool<Schema extends SchemaDef>(
   server: McpServer,
   models: McpModelDef[],
-  getClient: McpServerOptions<Schema>["getClient"],
-  zodFactory?: ZodFactory,
+  getClient: McpServerConfig<Schema>["getClient"],
+  zodFactory: ZodFactory,
   requireWhereForBulk?: boolean,
 ): void {
   const modelNames = models.map((m) => m.name) as [string, ...string[]];

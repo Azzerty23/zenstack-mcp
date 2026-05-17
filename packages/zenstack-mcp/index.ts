@@ -2,7 +2,7 @@
 export { default } from './src/plugin/index.js'
 
 // Shared types
-export type { McpConfig, McpModelDef, McpFieldDef, McpOperation, McpAuthAdapter, McpBuiltInAuthOptions, McpServerOptions, TokenStore } from './src/types.js'
+export type { McpConfig, McpModelDef, McpFieldDef, McpOperation, McpAuthAdapter, McpBuiltInAuthOptions, McpServerConfig, TokenStore } from './src/types.js'
 
 // Request context — access the authenticated user from anywhere within a request handler
 export { getRequestUser } from './src/context.js'

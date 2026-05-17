@@ -133,24 +133,3 @@ curl -s -X POST http://localhost:3001/ \
     }
   }' | jq .
 ```
-
-### Step 4 — Check a create operation before executing
-
-```bash
-curl -s -X POST http://localhost:3001/ \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": {
-      "name": "check",
-      "arguments": {
-        "model": "Post",
-        "operation": "create",
-        "args": { "data": { "title": "My new post", "authorId": "<your-user-id>" } }
-      }
-    }
-  }' | jq .
-```

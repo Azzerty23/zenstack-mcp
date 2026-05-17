@@ -69,9 +69,11 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
     : defaultLoginPage
 
   router.get('/oauth/authorize', async (req) => {
-    const { redirect_uri, code_challenge, client_id, code_challenge_method } = req.query
+    const { redirect_uri, code_challenge, client_id, code_challenge_method, response_type } = req.query
     if (!redirect_uri || !code_challenge || !client_id)
       return { type: 'json', status: 400, data: { error: 'invalid_request' } }
+    if (response_type && response_type !== 'code')
+      return { type: 'json', status: 400, data: { error: 'unsupported_response_type' } }
     if (code_challenge_method && code_challenge_method !== 'S256')
       return { type: 'json', status: 400, data: { error: 'invalid_request', error_description: 'Only S256 code_challenge_method is supported' } }
     const allowedUris = clientRegistry.get(String(client_id))

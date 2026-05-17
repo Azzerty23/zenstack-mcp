@@ -32,7 +32,6 @@ bun install
 
 # zen generate reads schema.zmodel and outputs:
 #   ./zenstack/schema.ts        (ZenStack ORM schema — imported by index.ts)
-#   .zenstack/zod/              (Zod validators used by the check tool)
 #   .zenstack/mcp-config.ts     (which models the MCP server exposes)
 bun run db:generate
 
@@ -140,29 +139,7 @@ curl -s -X POST http://localhost:3000/ \
   }' | jq .
 ```
 
-### Step 3 — Validate a write before executing (`check` tool)
-
-```bash
-curl -s -X POST http://localhost:3000/ \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/call",
-    "params": {
-      "name": "check",
-      "arguments": {
-        "model": "Post",
-        "operation": "create",
-        "args": { "data": { "title": "Hello world", "authorId": "user_1" } }
-      }
-    }
-  }' | jq .
-# → { "valid": true } or { "valid": false, "errors": [...] }
-```
-
-### Step 4 — Execute a query (`execute` tool)
+### Step 3 — Execute a query (`execute` tool)
 
 ZenStack access policies from `schema.zmodel` are enforced automatically — Alice only
 sees posts she is allowed to read.

@@ -1,9 +1,28 @@
 {
   "name": "zenstack-mcp",
   "version": "0.1.0",
+  "description": "Turnkey MCP (Model Context Protocol) server for ZenStack v3 with OAuth 2.0 authentication",
+  "license": "MIT",
+  "author": "azzerty23",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/azzerty23/zenstack-mcp.git"
+  },
+  "homepage": "https://github.com/azzerty23/zenstack-mcp#readme",
+  "keywords": [
+    "zenstack",
+    "mcp",
+    "model-context-protocol",
+    "prisma",
+    "oauth",
+    "llm",
+    "ai",
+    "claude"
+  ],
   "type": "module",
   "scripts": {
-    "build": "tsdown && cp src/plugin/plugin.zmodel dist/plugin.zmodel"
+    "build": "tsdown && cp src/plugin/plugin.zmodel dist/plugin.zmodel",
+    "prepublishOnly": "bun run build"
   },
   "exports": {
     ".": {
@@ -36,7 +55,8 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

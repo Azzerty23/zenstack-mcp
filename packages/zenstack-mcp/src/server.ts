@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createSchemaFactory } from "@zenstackhq/zod";
-import type { McpModelDef, McpServerOptions } from "./types.js";
+import type { McpModelDef, McpServerConfig } from "./types.js";
 import { ALL_OPERATIONS } from "./types.js";
 import { registerSchemaTool } from "./tools/schema-tool.js";
 import { registerExecuteTool } from "./tools/execute-tool.js";
+import { registerMeTool } from "./tools/me-tool.js";
 import type { SchemaDef } from "@zenstackhq/schema";
 
 type RawAttributeArg = {
@@ -21,6 +22,7 @@ type RawSchemaDef = {
         {
           type: string;
           id?: boolean;
+          unique?: boolean;
           optional?: boolean;
           array?: boolean;
           relation?: object;
@@ -67,9 +69,9 @@ function assertRawSchema(schema: unknown): asserts schema is RawSchemaDef {
 }
 
 export function extractModels<Schema extends SchemaDef>(
-  options: McpServerOptions<Schema>,
+  config: McpServerConfig<Schema>,
 ): McpModelDef[] {
-  const raw = options.schema as unknown;
+  const raw = config.schema as unknown;
   assertRawSchema(raw);
 
   const allModels = Object.entries(raw.models).map(([name, modelDef]) => {
@@ -78,6 +80,7 @@ export function extractModels<Schema extends SchemaDef>(
         name: fieldName,
         type: fieldDef.type,
         isId: fieldDef.id ?? false,
+        isUnique: fieldDef.unique ?? false,
         isRequired: !(fieldDef.optional ?? false),
         isList: fieldDef.array ?? false,
         isRelation: !!fieldDef.relation,
@@ -96,25 +99,25 @@ export function extractModels<Schema extends SchemaDef>(
   });
 
   let filtered: McpModelDef[];
-  if (options.mcpConfig) {
+  if (config.mcpConfig) {
     // Models absent from mcpConfig.models are treated as unexposed (denylist by default).
     // Only models with explicit exposed: true are included.
     filtered = allModels.filter(
-      (m) => options.mcpConfig!.models[m.name]?.exposed === true,
+      (m) => config.mcpConfig!.models[m.name]?.exposed === true,
     );
-  } else if (options.include) {
-    filtered = allModels.filter((m) => options.include!.includes(m.name));
-  } else if (options.exclude) {
-    filtered = allModels.filter((m) => !options.exclude!.includes(m.name));
+  } else if (config.include) {
+    filtered = allModels.filter((m) => config.include!.includes(m.name));
+  } else if (config.exclude) {
+    filtered = allModels.filter((m) => !config.exclude!.includes(m.name));
   } else {
     filtered = allModels;
   }
 
   // Apply per-model operation restrictions from mcpConfig or modelOperations option
   return filtered.map((m) => {
-    const fromOption = options.modelOperations?.[m.name];
+    const fromOption = config.modelOperations?.[m.name];
     if (fromOption) return { ...m, operations: fromOption };
-    const fromConfig = options.mcpConfig?.models[m.name]?.operations;
+    const fromConfig = config.mcpConfig?.models[m.name]?.operations;
     if (fromConfig) return { ...m, operations: fromConfig };
     return m;
   });
@@ -122,17 +125,23 @@ export function extractModels<Schema extends SchemaDef>(
 
 export function buildMcpServer<Schema extends SchemaDef>(
   models: McpModelDef[],
-  options: McpServerOptions<Schema>,
-  zodFactory?: ReturnType<typeof createSchemaFactory>,
+  config: McpServerConfig<Schema>,
 ): McpServer {
-  const factory = zodFactory ?? createSchemaFactory(options.schema as SchemaDef);
+  const factory = createSchemaFactory(config.schema);
   const server = new McpServer({
-    name: options.name ?? "zenstack-mcp",
-    version: options.version ?? "0.1.0",
+    name: config.name ?? "zenstack-mcp",
+    version: config.version ?? "0.1.0",
   });
 
   registerSchemaTool(server, models);
-  registerExecuteTool(server, models, options.getClient, factory as Parameters<typeof registerExecuteTool>[3], options.requireWhereForBulk);
+  registerMeTool(server);
+  registerExecuteTool(
+    server,
+    models,
+    config.getClient,
+    factory as Parameters<typeof registerExecuteTool>[3],
+    config.requireWhereForBulk,
+  );
 
   return server;
 }

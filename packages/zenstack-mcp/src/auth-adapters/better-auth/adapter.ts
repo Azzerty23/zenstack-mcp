@@ -37,6 +37,13 @@ export function betterAuthMcpAdapter(
   options?: {
     /** Override the default login page. Accepts an HTML string or an async function returning one. */
     loginPage?: string | (() => string | Promise<string>)
+    /** Maximum number of OAuth clients that can be registered (default: 100). */
+    maxClients?: number
+    /**
+     * Pre-shared bearer token required in `Authorization: Bearer <token>` on
+     * `POST /register`. When omitted, client registration is open.
+     */
+    initialAccessToken?: string
   },
 ): McpAuthAdapter {
   const store = createInMemoryTokenStore()
@@ -51,6 +58,7 @@ export function betterAuthMcpAdapter(
       // can validate the redirect_uri against this allowlist — prevents open redirect attacks where
       // a crafted redirect_uri would redirect the authorization code to an attacker-controlled URI.
       const clientRegistry = new Map<string, string[]>() // client_id → registered redirect_uris
+      const maxClients = options?.maxClients ?? 100
 
       router.get('/.well-known/oauth-authorization-server', () => ({
         type: 'json',
@@ -75,6 +83,13 @@ export function betterAuthMcpAdapter(
       }))
 
       router.post('/register', async (req) => {
+        if (clientRegistry.size >= maxClients)
+          return { type: 'json', status: 429, data: { error: 'too_many_clients' } }
+        if (options?.initialAccessToken) {
+          const expected = `Bearer ${options.initialAccessToken}`
+          if (req.authorization !== expected)
+            return { type: 'json', status: 401, data: { error: 'invalid_token' } }
+        }
         const body = await req.body()
         const clientId = crypto.randomUUID()
         const redirectUris = (body.redirect_uris as string[] | undefined) ?? []
@@ -94,9 +109,11 @@ export function betterAuthMcpAdapter(
       })
 
       router.get('/oauth/authorize', async (req) => {
-        const { redirect_uri, code_challenge, client_id, code_challenge_method } = req.query
+        const { redirect_uri, code_challenge, client_id, code_challenge_method, response_type } = req.query
         if (!redirect_uri || !code_challenge || !client_id)
           return { type: 'json', status: 400, data: { error: 'invalid_request' } }
+        if (response_type && response_type !== 'code')
+          return { type: 'json', status: 400, data: { error: 'unsupported_response_type' } }
         if (code_challenge_method && code_challenge_method !== 'S256')
           return { type: 'json', status: 400, data: { error: 'invalid_request', error_description: 'Only S256 code_challenge_method is supported' } }
         const allowedUris = clientRegistry.get(String(client_id))

@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import type { SchemaDef } from "@zenstackhq/schema";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { createSchemaFactory } from "@zenstackhq/zod";
+
 import type {
   McpAuthAdapter,
   McpBuiltInAuthOptions,
-  McpServerOptions,
+  McpServerConfig,
   RouterAdapter,
   GenericRequest,
 } from "../types.js";
@@ -23,7 +23,7 @@ function resolveAuthAdapter(
   return isBuiltInAuthOptions(auth) ? builtInMcpAuth(auth) : auth;
 }
 
-export type HonoMcpEnv = { Variables: { user: unknown } }
+export type HonoMcpEnv = { Variables: { user: unknown } };
 type Env = HonoMcpEnv;
 
 function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
@@ -38,7 +38,11 @@ function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
           body: async () => ({}),
         };
         const res = await handler(req);
-        if (res.type === "html") return new Response(res.html, { status: res.status ?? 200, headers: { "content-type": "text/html; charset=UTF-8" } });
+        if (res.type === "html")
+          return new Response(res.html, {
+            status: res.status ?? 200,
+            headers: { "content-type": "text/html; charset=UTF-8" },
+          });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return c.json(res.data as any, (res.status ?? 200) as any);
       });
@@ -59,7 +63,11 @@ function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
           },
         };
         const res = await handler(req);
-        if (res.type === "html") return new Response(res.html, { status: res.status ?? 200, headers: { "content-type": "text/html; charset=UTF-8" } });
+        if (res.type === "html")
+          return new Response(res.html, {
+            status: res.status ?? 200,
+            headers: { "content-type": "text/html; charset=UTF-8" },
+          });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         return c.json(res.data as any, (res.status ?? 200) as any);
       });
@@ -82,11 +90,10 @@ function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
  * ```
  */
 export function createHonoMcpHandler<Schema extends SchemaDef>(
-  options: McpServerOptions<Schema>,
+  config: McpServerConfig<Schema>,
 ): { oauthRoutes: Hono<Env>; mcpMiddleware: Hono<Env> } {
-  const authAdapter = resolveAuthAdapter(options.auth);
-  const models = extractModels<Schema>(options);
-  const zodFactory = createSchemaFactory(options.schema as SchemaDef);
+  const authAdapter = resolveAuthAdapter(config.auth);
+  const models = extractModels<Schema>(config);
 
   // OAuth routes — mount at root so discovery is at /.well-known/oauth-authorization-server
   const oauthApp = new Hono<Env>();
@@ -115,7 +122,7 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
     return next();
   });
 
-  const transport = options.transport ?? "streamable-http";
+  const transport = config.transport ?? "streamable-http";
 
   if (transport === "streamable-http" || transport === "both") {
     mcpApp.post("/", async (c) => {
@@ -131,7 +138,7 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
           // only after send() completes (via resolveJson), so server.close() is always safe.
           enableJsonResponse: true,
         });
-        const server = buildMcpServer<Schema>(models, options, zodFactory);
+        const server = buildMcpServer<Schema>(models, config);
         try {
           await server.connect(mcpTransport);
           return await mcpTransport.handleRequest(c.req.raw);
@@ -147,10 +154,14 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
   }
 
   if (transport === "sse" || transport === "both") {
-    const SSE_SESSION_TTL_MS = 60 * 60 * 1000 // 1 hour
+    const SSE_SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
     const sseSessions = new Map<
       string,
-      { transport: WebStandardStreamableHTTPServerTransport; user: unknown; createdAt: number }
+      {
+        transport: WebStandardStreamableHTTPServerTransport;
+        user: unknown;
+        createdAt: number;
+      }
     >();
 
     mcpApp.get("/sse", async (c) => {
@@ -159,14 +170,19 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
       const mcpTransport = new WebStandardStreamableHTTPServerTransport({
         sessionIdGenerator: () => sessionId,
       });
-      const server = buildMcpServer<Schema>(models, options, zodFactory);
+      const server = buildMcpServer<Schema>(models, config);
 
       // Evict sessions that outlived the TTL (covers abrupt disconnects where onclose never fires).
-      const now = Date.now()
+      const now = Date.now();
       for (const [id, session] of sseSessions) {
-        if (now - session.createdAt > SSE_SESSION_TTL_MS) sseSessions.delete(id)
+        if (now - session.createdAt > SSE_SESSION_TTL_MS)
+          sseSessions.delete(id);
       }
-      sseSessions.set(sessionId, { transport: mcpTransport, user, createdAt: now });
+      sseSessions.set(sessionId, {
+        transport: mcpTransport,
+        user,
+        createdAt: now,
+      });
       // For SSE the connection is long-lived, so close the server when the transport
       // closes rather than in a finally block (which would terminate the stream early).
       mcpTransport.onclose = () => {
@@ -193,9 +209,8 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
       // Using session.user (stored at SSE open time) would silently continue with a stale
       // identity if the token was rotated between messages.
       const user = c.get("user") as AuthType<Schema>;
-      return requestContext.run(
-        { user },
-        () => session.transport.handleRequest(c.req.raw),
+      return requestContext.run({ user }, () =>
+        session.transport.handleRequest(c.req.raw),
       );
     });
   }

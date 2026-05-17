@@ -54,7 +54,7 @@ const { oauthRoutes, mcpMiddleware } = createExpressMcpHandler({
       const ok = await bcrypt.compare(password, user.passwordHash);
       return ok ? { id: user.id, email: user.email } : null;
     },
-    jwtSecret: process.env.JWT_SECRET ?? "change-me-in-production",
+    jwtSecret: process.env.JWT_SECRET ?? "dev-secret-do-not-use-in-production!",
     tokenTtl: 3600,
     loginPage: () => Bun.file(import.meta.dir + "/login.html").text(),
     tokenStore,

@@ -3,12 +3,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// Generates Zod validators for the check tool
-plugin zod {
-  provider = "@zenstackhq/zod"
-  output   = "zenstack/zod"
-}
-
 // Generates mcp-config.ts — controls which models the MCP server exposes
 plugin mcp {
   provider = "zenstack-mcp"

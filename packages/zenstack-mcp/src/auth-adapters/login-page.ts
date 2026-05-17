@@ -1,8 +1,6 @@
 import { loginScript } from './oauth/login-script.js'
 import { loginHtml } from './oauth/login-html.js'
 
-export { loginScript }
-
 export function loginPage(): string {
   return loginHtml
 }

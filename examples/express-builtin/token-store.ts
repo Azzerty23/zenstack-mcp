@@ -37,6 +37,7 @@ export function createSqliteTokenStore(dbPath: string): TokenStore {
 
   return {
     async saveCode(code, user, codeChallenge, expiresAt) {
+      db.run(`DELETE FROM mcp_auth_codes WHERE expires_at < ${Date.now()}`)
       db.run(
         'INSERT OR REPLACE INTO mcp_auth_codes (code, user, code_challenge, expires_at) VALUES (?, ?, ?, ?)',
         [code, JSON.stringify(user), codeChallenge, expiresAt],
@@ -51,10 +52,12 @@ export function createSqliteTokenStore(dbPath: string): TokenStore {
         .get(code)
       if (!row) return null
       db.run('DELETE FROM mcp_auth_codes WHERE code = ?', [code])
+      if (Date.now() > row.expires_at) return null
       return { user: JSON.parse(row.user), codeChallenge: row.code_challenge, expiresAt: row.expires_at }
     },
 
     async saveRefreshToken(token, user, expiresAt) {
+      db.run(`DELETE FROM mcp_refresh_tokens WHERE expires_at < ${Date.now()}`)
       db.run(
         'INSERT OR REPLACE INTO mcp_refresh_tokens (token, user, expires_at) VALUES (?, ?, ?)',
         [token, JSON.stringify(user), expiresAt],
@@ -69,6 +72,7 @@ export function createSqliteTokenStore(dbPath: string): TokenStore {
         .get(token)
       if (!row) return null
       db.run('DELETE FROM mcp_refresh_tokens WHERE token = ?', [token])
+      if (Date.now() > row.expires_at) return null
       return { user: JSON.parse(row.user), expiresAt: row.expires_at }
     },
 

@@ -3,11 +3,10 @@ import type { Request, Response, NextFunction } from "express";
 import type { SchemaDef } from "@zenstackhq/schema";
 import type { AuthType } from "@zenstackhq/orm";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { createSchemaFactory } from "@zenstackhq/zod";
+
 import type {
   McpAuthAdapter,
-  McpBuiltInAuthOptions,
-  McpServerOptions,
+  McpServerConfig,
   RouterAdapter,
   GenericRequest,
 } from "../types.js";
@@ -68,25 +67,28 @@ function expressRouterAdapter(
  *
  * @example
  * ```ts
- * const { oauthRoutes, mcpMiddleware } = createExpressMcpHandler(options)
+ * const { oauthRoutes, mcpMiddleware } = createExpressMcpHandler(config)
  * app.use(oauthRoutes)           // /.well-known/*, /oauth/*, /login, /register
  * app.use('/mcp', mcpMiddleware) // POST /mcp/ → MCP transport (requires Bearer)
  * ```
  */
 export function createExpressMcpHandler<Schema extends SchemaDef>(
-  options: McpServerOptions<Schema>,
-): { oauthRoutes: ReturnType<typeof Router>; mcpMiddleware: ReturnType<typeof Router> } {
-  const transport = options.transport ?? "streamable-http";
+  config: McpServerConfig<Schema>,
+): {
+  oauthRoutes: ReturnType<typeof Router>;
+  mcpMiddleware: ReturnType<typeof Router>;
+} {
+  const transport = config.transport ?? "streamable-http";
   if (transport !== "streamable-http") {
     throw new Error(
       `Express adapter only supports "streamable-http" transport. Got: "${transport}". ` +
-      `Use the Hono adapter for SSE support.`,
+        `Use the Hono adapter for SSE support.`,
     );
   }
 
-  const authAdapter: McpAuthAdapter = isBuiltInAuthOptions(options.auth)
-    ? builtInMcpAuth(options.auth)
-    : (options.auth as McpAuthAdapter);
+  const authAdapter: McpAuthAdapter = isBuiltInAuthOptions(config.auth)
+    ? builtInMcpAuth(config.auth)
+    : (config.auth as McpAuthAdapter);
 
   // OAuth routes — mount at root so discovery is at /.well-known/oauth-authorization-server
   const oauthRouter = Router();
@@ -119,8 +121,7 @@ export function createExpressMcpHandler<Schema extends SchemaDef>(
     }
   });
 
-  const models = extractModels(options);
-  const zodFactory = createSchemaFactory(options.schema as SchemaDef);
+  const models = extractModels(config);
 
   mcpRouter.post(
     "/",
@@ -134,7 +135,7 @@ export function createExpressMcpHandler<Schema extends SchemaDef>(
         const mcpTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: undefined,
         });
-        const server = buildMcpServer(models, options, zodFactory);
+        const server = buildMcpServer(models, config);
         try {
           await server.connect(mcpTransport);
           await mcpTransport.handleRequest(req, res, req.body);

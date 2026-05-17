@@ -34,6 +34,7 @@ export interface McpFieldDef {
   name: string;
   type: string;
   isId: boolean;
+  isUnique: boolean;
   isRequired: boolean;
   isList: boolean;
   isRelation: boolean;
@@ -171,7 +172,7 @@ export type ZenStackClientShape = Record<
   Record<string, (...args: unknown[]) => Promise<unknown>>
 >;
 
-export interface McpServerOptions<Schema extends SchemaDef> {
+export interface McpServerConfig<Schema extends SchemaDef> {
   /** ZenStack generated schema (import from '~/zenstack/schema') */
   schema: Schema;
   /** Auth adapter or built-in config */

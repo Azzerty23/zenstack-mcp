@@ -37,7 +37,6 @@ const { oauthRoutes, mcpMiddleware } = createHonoMcpHandler({
     loginPage: () => Bun.file(import.meta.dir + "/login.html").text(),
   }),
   getClient: async (user: AuthType<typeof schema>) =>
-    // @ts-ignore
     db.$use(new PolicyPlugin()).$setAuth({ id: user.id }),
 });
 
@@ -55,6 +54,7 @@ console.log("MCP (HTTP)       → POST http://localhost:3000/");
 console.log("MCP (SSE)        → GET  http://localhost:3000/sse");
 
 console.log();
+console.log("Demo login       → http://localhost:3000/login");
 console.log("Test credentials → alice@example.com / alice1234");
 console.log("                   bob@example.com   / bob12345");
 console.log("                   carol@example.com / carol123");
