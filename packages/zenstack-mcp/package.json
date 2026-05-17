@@ -1,0 +1,103 @@
+{
+  "name": "zenstack-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsdown && cp src/plugin/plugin.zmodel dist/plugin.zmodel"
+  },
+  "exports": {
+    ".": {
+      "bun": "./index.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./auth-adapters/better-auth": {
+      "bun": "./src/auth-adapters/better-auth/adapter.ts",
+      "default": "./dist/auth-adapters/better-auth.mjs"
+    },
+    "./plugin": {
+      "bun": "./src/plugin/index.ts",
+      "default": "./dist/plugin.mjs"
+    },
+    "./server": {
+      "bun": "./src/server.ts",
+      "default": "./dist/server.mjs"
+    },
+    "./server-adapters/express": {
+      "bun": "./src/server-adapters/express.ts",
+      "default": "./dist/server-adapters/express.mjs"
+    },
+    "./server-adapters/hono": {
+      "bun": "./src/server-adapters/hono.ts",
+      "default": "./dist/server-adapters/hono.mjs"
+    },
+    "./package.json": "./package.json",
+    "./plugin.zmodel": "./dist/plugin.zmodel",
+    "./plugin/plugin.zmodel": "./dist/plugin.zmodel"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@zenstackhq/zod": "^3.7.0",
+    "jose": "^6.2.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/express": "^5.0.6",
+    "@zenstackhq/language": "^3.7.0",
+    "langium": "^3.5.0",
+    "@zenstackhq/plugin-policy": "^3.7.0",
+    "@zenstackhq/schema": "^3.7.0",
+    "@zenstackhq/sdk": "^3.7.0",
+    "hono": "^4.12.18",
+    "tsdown": "^0.22.0"
+  },
+  "peerDependencies": {
+    "@zenstackhq/orm": "^3.7.0",
+    "@zenstackhq/plugin-policy": "^3.7.0",
+    "@zenstackhq/schema": "^3.7.0",
+    "@zenstackhq/sdk": "^3.7.0",
+    "better-auth": "*",
+    "express": "^5.x",
+    "hono": "^4.x",
+    "zod": "^4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-auth": {
+      "optional": true
+    },
+    "express": {
+      "optional": true
+    },
+    "hono": {
+      "optional": true
+    },
+    "@zenstackhq/plugin-policy": {
+      "optional": true
+    },
+    "@zenstackhq/schema": {
+      "optional": true
+    },
+    "@zenstackhq/orm": {
+      "optional": true
+    }
+  },
+  "inlinedDependencies": {
+    "@zenstackhq/language": "3.7.0"
+  },
+  "publishConfig": {
+    "exports": {
+      ".": "./dist/index.mjs",
+      "./auth-adapters/better-auth": "./dist/auth-adapters/better-auth.mjs",
+      "./plugin": "./dist/plugin.mjs",
+      "./server": "./dist/server.mjs",
+      "./server-adapters/express": "./dist/server-adapters/express.mjs",
+      "./server-adapters/hono": "./dist/server-adapters/hono.mjs",
+      "./package.json": "./package.json",
+      "./plugin.zmodel": "./dist/plugin.zmodel",
+      "./plugin/plugin.zmodel": "./dist/plugin.zmodel"
+    }
+  }
+}

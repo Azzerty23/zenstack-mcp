@@ -1,0 +1,28 @@
+{
+  "name": "example-hono-better-auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --hot index.ts",
+    "db:generate": "zen generate",
+    "db:push": "zen db push",
+    "db:seed": "bun seed.ts"
+  },
+  "dependencies": {
+    "zenstack-mcp": "workspace:*",
+    "hono": "^4.x",
+    "better-auth": "^1.x",
+    "@zenstackhq/better-auth": "^3.7.0",
+    "@zenstackhq/orm": "^3.7.0",
+    "@zenstackhq/plugin-policy": "^3.7.0",
+    "@zenstackhq/schema": "^3.7.0",
+    "kysely-bun-worker": "^1.x"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest",
+    "@zenstackhq/sdk": "^3.7.0",
+    "@zenstackhq/cli": "^3.7.0"
+  }
+}
