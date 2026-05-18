@@ -1,6 +1,7 @@
 import type { RouterAdapter, McpBuiltInAuthOptions } from '../../types.js'
 import { createInMemoryTokenStore, pkceVerify, randomCode, randomToken } from './store.js'
 import { signToken } from './jwt.js'
+import { normalizeRedirectUris } from './redirect-uri.js'
 import { injectLoginScript, loginPage as defaultLoginPage } from '../login-page.js'
 
 export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthOptions): void {
@@ -48,7 +49,9 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
 
     const body = await req.body()
     const clientId = crypto.randomUUID()
-    const redirectUris = (body.redirect_uris as string[] | undefined) ?? []
+    const redirectUris = normalizeRedirectUris(body.redirect_uris)
+    if (!redirectUris)
+      return { type: 'json', status: 400, data: { error: 'invalid_redirect_uri' } }
     clientRegistry.set(clientId, redirectUris)
     return {
       type: 'json',

@@ -5,6 +5,7 @@ import {
   pkceVerify,
   randomCode,
 } from "../oauth/store.js";
+import { normalizeRedirectUris } from "../oauth/redirect-uri.js";
 import {
   decryptCode,
   encryptCode,
@@ -96,6 +97,11 @@ export function betterAuthMcpAdapter(
   const secret = options?.stateful
     ? undefined
     : (options?.secret ?? auth.options.secret);
+  if (secret && secret.length < 32) {
+    throw new Error(
+      "zenstack-mcp: better-auth stateless secret must be at least 32 characters",
+    );
+  }
   const refreshTokenExpiresIn =
     options?.refreshTokenExpiresIn ?? 30 * 24 * 3600;
 
@@ -215,9 +221,14 @@ export function betterAuthMcpAdapter(
               data: { error: "invalid_token" },
             };
         }
-        const { redirect_uris: redirectUris = [] } = (await req.body()) as {
-          redirect_uris?: string[];
-        };
+        const body = (await req.body()) as { redirect_uris?: unknown };
+        const redirectUris = normalizeRedirectUris(body.redirect_uris);
+        if (!redirectUris)
+          return {
+            type: "json",
+            status: 400,
+            data: { error: "invalid_redirect_uri" },
+          };
 
         const clientId = await registerClient(redirectUris);
         if (!clientId)

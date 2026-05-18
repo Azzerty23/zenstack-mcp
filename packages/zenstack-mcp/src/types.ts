@@ -157,6 +157,8 @@ export interface McpBuiltInAuthOptions {
    * Pre-shared bearer token required in `Authorization: Bearer <token>` on
    * `POST /register` (RFC 7591 initial access token). When omitted, client
    * registration is open — acceptable only in trusted-network / dev setups.
+   * Registered redirect URIs are restricted to HTTPS, plus loopback HTTP for
+   * local/native development callbacks.
    */
   initialAccessToken?: string;
   /** Maximum number of OAuth clients that can be registered (default: 100). */

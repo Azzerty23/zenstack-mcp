@@ -137,6 +137,9 @@ The server exposes three tools to connected AI clients:
 
 Wraps a [better-auth](https://better-auth.com) instance as an `McpAuthAdapter`.
 
+OAuth client registration only accepts `https://` redirect URIs, plus loopback
+`http://localhost` / `http://127.0.0.1` / `http://[::1]` callbacks for local development.
+
 ### `getRequestUser()`
 
 Returns the currently authenticated user from within a request handler.
