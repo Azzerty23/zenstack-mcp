@@ -47,7 +47,8 @@ export function registerExecuteTool<Schema extends SchemaDef>(
       const modelDef = models.find((m) => m.name === model)!;
 
       try {
-        const client = await getClient(getRequestUser() as AuthType<Schema>) as ZenStackClientShape;
+        const resolvedUser = getRequestUser() as AuthType<Schema>;
+        const client = await getClient(resolvedUser) as ZenStackClientShape;
         const modelClient = client[modelDef.dbName];
         if (!modelClient) {
           throw new Error(`Client does not expose model "${model}"`);

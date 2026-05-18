@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { SchemaDef } from "@zenstackhq/schema";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
@@ -8,6 +8,7 @@ import type {
   McpServerConfig,
   RouterAdapter,
   GenericRequest,
+  GenericResponse,
 } from "../types.js";
 import {
   builtInMcpAuth,
@@ -26,6 +27,16 @@ function resolveAuthAdapter(
 export type HonoMcpEnv = { Variables: { user: unknown } };
 type Env = HonoMcpEnv;
 
+function sendGenericResponse(c: Context, res: GenericResponse): Response {
+  if (res.type === "html")
+    return new Response(res.html, {
+      status: res.status ?? 200,
+      headers: { "content-type": "text/html; charset=UTF-8" },
+    });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return c.json(res.data as any, (res.status ?? 200) as any);
+}
+
 function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
   return {
     get(path, handler) {
@@ -37,14 +48,7 @@ function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
           authorization: c.req.header("Authorization"),
           body: async () => ({}),
         };
-        const res = await handler(req);
-        if (res.type === "html")
-          return new Response(res.html, {
-            status: res.status ?? 200,
-            headers: { "content-type": "text/html; charset=UTF-8" },
-          });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return c.json(res.data as any, (res.status ?? 200) as any);
+        return sendGenericResponse(c, await handler(req));
       });
     },
     post(path, handler) {
@@ -62,14 +66,7 @@ function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
             return c.req.parseBody() as Promise<Record<string, unknown>>;
           },
         };
-        const res = await handler(req);
-        if (res.type === "html")
-          return new Response(res.html, {
-            status: res.status ?? 200,
-            headers: { "content-type": "text/html; charset=UTF-8" },
-          });
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return c.json(res.data as any, (res.status ?? 200) as any);
+        return sendGenericResponse(c, await handler(req));
       });
     },
   };
@@ -127,27 +124,35 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
   if (transport === "streamable-http" || transport === "both") {
     mcpApp.post("/", async (c) => {
       const user = c.get("user") as AuthType<Schema>;
-      return requestContext.run({ user }, async () => {
-        const mcpTransport = new WebStandardStreamableHTTPServerTransport({
-          sessionIdGenerator: undefined,
-          // Without enableJsonResponse, handleRequest returns a streaming Response immediately
-          // while the MCP handler runs asynchronously (via Promise.resolve().then() chain).
-          // server.close() in the finally block would close the SSE stream controller before
-          // the handler writes its response, leaving Claude with an empty stream and causing
-          // it to retry auth indefinitely. With enableJsonResponse, handleRequest resolves
-          // only after send() completes (via resolveJson), so server.close() is always safe.
-          enableJsonResponse: true,
-        });
-        const server = buildMcpServer<Schema>(models, config);
-        try {
-          await server.connect(mcpTransport);
-          return await mcpTransport.handleRequest(c.req.raw);
-        } finally {
-          // server.connect() registers event listeners; without close() they accumulate
-          // across requests and produce MaxListenersExceededWarning under load.
-          await server.close();
-        }
+      const mcpTransport = new WebStandardStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        // Without enableJsonResponse, handleRequest returns a streaming Response immediately
+        // while the MCP handler runs asynchronously (via Promise.resolve().then() chain).
+        // server.close() in the finally block would close the SSE stream controller before
+        // the handler writes its response, leaving Claude with an empty stream and causing
+        // it to retry auth indefinitely. With enableJsonResponse, handleRequest resolves
+        // only after send() completes (via resolveJson), so server.close() is always safe.
+        enableJsonResponse: true,
       });
+      const server = buildMcpServer<Schema>(models, config);
+      try {
+        await server.connect(mcpTransport);
+        const response = await requestContext.run({ user }, () =>
+          mcpTransport.handleRequest(c.req.raw),
+        );
+        // Read the body fully so no ReadableStream remains in-flight after this handler returns.
+        const body = await response.arrayBuffer();
+        // Close the server BEFORE returning the response — this ensures no async work
+        // (event-listener teardown, stream controller close) leaks into the CF Workers
+        // event loop after the Response is handed back. A pending post-response Promise
+        // (e.g. via waitUntil) that rejects or hangs marks the isolate as errored and
+        // causes every subsequent request to be killed immediately.
+        await server.close();
+        return new Response(body, { status: response.status, headers: response.headers });
+      } catch (err) {
+        await server.close().catch(() => {});
+        throw err;
+      }
     });
 
     mcpApp.delete("/", (c) => c.json({ ok: true }));

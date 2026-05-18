@@ -1,6 +1,6 @@
-import { AsyncLocalStorage } from 'node:async_hooks'
+import { AsyncLocalStorage } from "node:async_hooks";
 
-export const requestContext = new AsyncLocalStorage<{ user: unknown }>()
+export const requestContext = new AsyncLocalStorage<{ user: unknown }>();
 
 /**
  * Returns the authenticated user for the current request, or `undefined` when
@@ -9,5 +9,5 @@ export const requestContext = new AsyncLocalStorage<{ user: unknown }>()
  * caller — expose only what your policies allow for `@@allow('read', true)` etc.
  */
 export function getRequestUser(): unknown | undefined {
-  return requestContext.getStore()?.user
+  return requestContext.getStore()?.user;
 }

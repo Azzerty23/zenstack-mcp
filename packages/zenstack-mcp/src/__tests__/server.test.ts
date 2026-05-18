@@ -52,13 +52,13 @@ describe("extractModels — basic extraction", () => {
   test("sets dbName to lowerFirst of model name", () => {
     const schema = makeSchema({ User: userModel });
     const models = extractModels(config({ schema }));
-    expect(models[0].dbName).toBe("user");
+    expect(models[0]!.dbName).toBe("user");
   });
 
   test("maps fields correctly", () => {
     const schema = makeSchema({ User: userModel });
     const models = extractModels(config({ schema }));
-    const idField = models[0].fields.find((f) => f.name === "id");
+    const idField = models[0]!.fields.find((f) => f.name === "id");
     expect(idField?.isId).toBe(true);
     expect(idField?.type).toBe("String");
   });
@@ -74,7 +74,7 @@ describe("extractModels — basic extraction", () => {
       },
     });
     const models = extractModels(config({ schema }));
-    const bioField = models[0].fields.find((f) => f.name === "bio");
+    const bioField = models[0]!.fields.find((f) => f.name === "bio");
     expect(bioField?.isRequired).toBe(false);
   });
 
@@ -89,7 +89,7 @@ describe("extractModels — basic extraction", () => {
       },
     });
     const models = extractModels(config({ schema }));
-    const authorField = models[0].fields.find((f) => f.name === "author");
+    const authorField = models[0]!.fields.find((f) => f.name === "author");
     expect(authorField?.isRelation).toBe(true);
   });
 
@@ -111,13 +111,13 @@ describe("extractModels — @@map attribute", () => {
       },
     });
     const models = extractModels(config({ schema }));
-    expect(models[0].mapName).toBe("users");
+    expect(models[0]!.mapName).toBe("users");
   });
 
   test("omits mapName when @@map is absent", () => {
     const schema = makeSchema({ User: userModel });
     const models = extractModels(config({ schema }));
-    expect(models[0].mapName).toBeUndefined();
+    expect(models[0]!.mapName).toBeUndefined();
   });
 
   test("dbName is still lowerFirst even when @@map is present", () => {
@@ -131,7 +131,7 @@ describe("extractModels — @@map attribute", () => {
       },
     });
     const models = extractModels(config({ schema }));
-    expect(models[0].dbName).toBe("user");
+    expect(models[0]!.dbName).toBe("user");
   });
 });
 
@@ -191,7 +191,7 @@ describe("extractModels — mcpConfig filter", () => {
         },
       },
     }));
-    expect(models[0].operations).toEqual(["findMany", "findUnique"]);
+    expect(models[0]!.operations).toEqual(["findMany", "findUnique"]);
   });
 
   test("mcpConfig takes priority over include/exclude", () => {
