@@ -420,6 +420,12 @@ export function betterAuthMcpAdapter(
               refresh_token: newRefreshToken,
               token_type: "bearer",
               expires_in: expiresIn,
+              // Report the actual remaining lifetime of the re-issued refresh token
+              // (same exp as the original), not the full configured TTL.
+              refresh_token_expires_in: Math.max(
+                0,
+                Math.floor((rtPayload.exp - Date.now()) / 1000),
+              ),
             },
           };
         }

@@ -169,6 +169,14 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
       }
     >();
 
+    function evictExpiredSseSessions() {
+      const now = Date.now();
+      for (const [id, session] of sseSessions) {
+        if (now - session.createdAt > SSE_SESSION_TTL_MS)
+          sseSessions.delete(id);
+      }
+    }
+
     mcpApp.get("/sse", async (c) => {
       const user = c.get("user") as AuthType<Schema>;
       const sessionId = crypto.randomUUID();
@@ -178,15 +186,11 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
       const server = buildMcpServer<Schema>(models, config);
 
       // Evict sessions that outlived the TTL (covers abrupt disconnects where onclose never fires).
-      const now = Date.now();
-      for (const [id, session] of sseSessions) {
-        if (now - session.createdAt > SSE_SESSION_TTL_MS)
-          sseSessions.delete(id);
-      }
+      evictExpiredSseSessions();
       sseSessions.set(sessionId, {
         transport: mcpTransport,
         user,
-        createdAt: now,
+        createdAt: Date.now(),
       });
       // For SSE the connection is long-lived, so close the server when the transport
       // closes rather than in a finally block (which would terminate the stream early).
@@ -202,6 +206,8 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
     });
 
     mcpApp.post("/sse", async (c) => {
+      // Evict here too: covers the case where no new SSE connections arrive after abrupt drops.
+      evictExpiredSseSessions();
       const sessionId = c.req.header("mcp-session-id");
       if (!sessionId) {
         return c.json({ error: "missing mcp-session-id header" }, 400);

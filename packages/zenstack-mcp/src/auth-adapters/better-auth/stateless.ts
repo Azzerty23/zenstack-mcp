@@ -26,24 +26,59 @@ function base64urlDecode(s: string): Uint8Array<ArrayBuffer> {
 }
 
 // Module-level key caches — derived once per secret per process/isolate, reused across requests.
+// Keys are indexed by SHA-256(secret) in hex, not by the plaintext secret, so the raw secret
+// string is not retained in module-level state after the fingerprint is computed.
 const aesKeyCache = new Map<string, Promise<CryptoKey>>()
 const hmacKeyCache = new Map<string, Promise<CryptoKey>>()
+// Transitional cache: holds the fingerprint promise while it resolves, then deletes the raw-secret
+// key so the plaintext is eligible for GC.
+const fingerprintCache = new Map<string, Promise<string>>()
 
 type KeyUsage = 'decrypt' | 'deriveBits' | 'deriveKey' | 'encrypt' | 'sign' | 'unwrapKey' | 'verify' | 'wrapKey'
 
+async function secretFingerprint(secret: string): Promise<string> {
+  let p = fingerprintCache.get(secret)
+  if (!p) {
+    p = crypto.subtle
+      .digest('SHA-256', new TextEncoder().encode(secret))
+      .then(buf => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join(''))
+    fingerprintCache.set(secret, p)
+    // Remove the raw-secret key once resolved so the plaintext string can be GC'd.
+    void p.then(() => fingerprintCache.delete(secret))
+  }
+  return p
+}
+
 async function aesKeyFromSecret(secret: string, usage: KeyUsage[]): Promise<CryptoKey> {
-  const cacheKey = `${secret}:${usage.slice().sort().join(',')}`
+  const fp = await secretFingerprint(secret)
+  const cacheKey = `${fp}:${usage.slice().sort().join(',')}`
   let p = aesKeyCache.get(cacheKey)
   if (!p) {
-    p = crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret))
-      .then(raw => crypto.subtle.importKey('raw', raw, 'AES-GCM', false, usage))
+    // HKDF — proper KDF with domain-separated info; resists offline dictionary attacks.
+    p = crypto.subtle
+      .importKey('raw', new TextEncoder().encode(secret), 'HKDF', false, ['deriveKey'])
+      .then(baseKey =>
+        crypto.subtle.deriveKey(
+          {
+            name: 'HKDF',
+            hash: 'SHA-256',
+            salt: new Uint8Array(32),
+            info: new TextEncoder().encode('zenstack-mcp aes-gcm v1'),
+          },
+          baseKey,
+          { name: 'AES-GCM', length: 256 },
+          false,
+          usage,
+        ),
+      )
     aesKeyCache.set(cacheKey, p)
   }
   return p
 }
 
 async function hmacKeyFromSecret(secret: string): Promise<CryptoKey> {
-  let p = hmacKeyCache.get(secret)
+  const fp = await secretFingerprint(secret)
+  let p = hmacKeyCache.get(fp)
   if (!p) {
     p = crypto.subtle.importKey(
       'raw',
@@ -52,7 +87,7 @@ async function hmacKeyFromSecret(secret: string): Promise<CryptoKey> {
       false,
       ['sign', 'verify'],
     )
-    hmacKeyCache.set(secret, p)
+    hmacKeyCache.set(fp, p)
   }
   return p
 }

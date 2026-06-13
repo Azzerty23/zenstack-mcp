@@ -97,13 +97,18 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
 
     // Validate again at login time: the form could bypass /oauth/authorize and POST directly
     // with an arbitrary redirect_uri, so the allowlist check must be enforced here too.
+    if (!email || !password || !redirect_uri || !code_challenge)
+      return { type: 'json', status: 400, data: { error: 'invalid_request' } }
+
+    // Validate again at login time: the form could bypass /oauth/authorize and POST directly
+    // with an arbitrary redirect_uri, so the allowlist check must be enforced here too.
     const allowedUris = client_id ? clientRegistry.get(String(client_id)) : undefined
     if (!allowedUris)
       return { type: 'json', status: 400, data: { error: 'invalid_client' } }
     if (!allowedUris.includes(String(redirect_uri)))
       return { type: 'json', status: 400, data: { error: 'invalid_redirect_uri' } }
 
-    const user = await options.validateCredentials(String(email ?? ''), String(password ?? ''))
+    const user = await options.validateCredentials(String(email), String(password))
     if (!user) return { type: 'json', status: 401, data: { error: 'Invalid credentials' } }
 
     const code = randomCode()

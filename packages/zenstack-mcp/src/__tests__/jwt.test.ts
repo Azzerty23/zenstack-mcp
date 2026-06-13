@@ -1,4 +1,5 @@
 import { describe, test, expect } from "bun:test";
+import { SignJWT } from "jose";
 import { signToken, verifyToken } from "../auth-adapters/oauth/jwt.js";
 
 const SECRET = "test-secret-key-for-jwt-signing";
@@ -17,17 +18,11 @@ describe("signToken / verifyToken", () => {
   });
 
   test("verifyToken throws for an expired token", async () => {
-    // ttl of 1 second; we manipulate time via a past iat by signing with ttl=0
-    // jose rejects tokens with exp <= now. Use a negative ttl work-around
-    // by signing with a past issuedAt isn't possible directly, so we sign
-    // with ttl=1 and wait is not practical — instead craft a known expired JWT.
-    // A simpler approach: sign normally but catch the "expired" error path by
-    // verifying that signToken produces a JWT and jwtVerify can detect expiry.
-    // We rely on jose's own expiry validation, so we just check a tampered token fails.
-    const token = await signToken({ id: "u1" }, SECRET, 1);
-    // Tamper with the exp claim by base64-encoding a past exp
-    // Instead just verify that a clearly malformed token throws
-    await expect(verifyToken("not.a.valid.jwt", SECRET)).rejects.toThrow();
+    const expiredToken = await new SignJWT({ data: { id: "u1" } })
+      .setProtectedHeader({ alg: "HS256" })
+      .setExpirationTime(new Date(Date.now() - 1000))
+      .sign(new TextEncoder().encode(SECRET));
+    await expect(verifyToken(expiredToken, SECRET)).rejects.toThrow();
   });
 
   test("verifyToken throws for a malformed token", async () => {
