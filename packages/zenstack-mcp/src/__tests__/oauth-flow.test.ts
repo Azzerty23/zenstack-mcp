@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mountOAuthRoutes } from "../auth-adapters/oauth/oauth-server.js";
 import { verifyToken } from "../auth-adapters/oauth/jwt.js";
 import type { GenericRequest, GenericResponse, RouterAdapter } from "../types.js";
+import { jsonData } from "./helpers.js";
 
 const JWT_SECRET = "test-jwt-secret-at-least-32-chars!!";
 
@@ -16,7 +17,7 @@ function createFullHarness() {
     post(path, handler) { postHandlers.set(path, handler); },
   };
 
-  function makeReq(overrides: Partial<GenericRequest> & { body?: Record<string, unknown> }): GenericRequest {
+  function makeReq(overrides: Omit<Partial<GenericRequest>, "body"> & { body?: Record<string, unknown> }): GenericRequest {
     const { body, ...rest } = overrides;
     return {
       origin: "https://server.example",
@@ -78,7 +79,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       redirect_uris: ["https://client.example/callback"],
     });
     expect(regRes.status ?? 200).toBe(201);
-    const regData = regRes.data as Record<string, unknown>;
+    const regData = jsonData(regRes) as Record<string, unknown>;
     const clientId = regData.client_id as string;
     expect(typeof clientId).toBe("string");
 
@@ -100,7 +101,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       client_id: clientId,
     });
     expect(loginRes.type).toBe("json");
-    const { redirectUrl } = loginRes.data as { redirectUrl: string };
+    const { redirectUrl } = jsonData(loginRes) as { redirectUrl: string };
     const code = new URL(redirectUrl).searchParams.get("code");
     expect(typeof code).toBe("string");
 
@@ -111,7 +112,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code_verifier: verifier,
     });
     expect(tokenRes.type).toBe("json");
-    const tokens = tokenRes.data as Record<string, unknown>;
+    const tokens = jsonData(tokenRes) as Record<string, unknown>;
     expect(typeof tokens.access_token).toBe("string");
     expect(typeof tokens.refresh_token).toBe("string");
     expect(tokens.token_type).toBe("bearer");
@@ -129,7 +130,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const loginRes = await harness.post("/login", {
       email: TEST_USER.email,
@@ -138,7 +139,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code_challenge: challenge,
       client_id: clientId,
     });
-    const code = new URL((loginRes.data as { redirectUrl: string }).redirectUrl)
+    const code = new URL((jsonData(loginRes) as { redirectUrl: string }).redirectUrl)
       .searchParams.get("code")!;
 
     const tokenRes = await harness.post("/oauth/token", {
@@ -147,7 +148,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code_verifier: wrongVerifier,
     });
     expect(tokenRes.status).toBe(400);
-    expect((tokenRes.data as Record<string, unknown>).error).toBe("invalid_grant");
+    expect((jsonData(tokenRes) as Record<string, unknown>).error).toBe("invalid_grant");
   });
 
   test("authorization code is one-time use", async () => {
@@ -157,7 +158,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const loginRes = await harness.post("/login", {
       email: TEST_USER.email,
@@ -166,7 +167,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code_challenge: challenge,
       client_id: clientId,
     });
-    const code = new URL((loginRes.data as { redirectUrl: string }).redirectUrl)
+    const code = new URL((jsonData(loginRes) as { redirectUrl: string }).redirectUrl)
       .searchParams.get("code")!;
 
     // First exchange succeeds
@@ -175,7 +176,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code,
       code_verifier: verifier,
     });
-    expect((first.data as Record<string, unknown>).access_token).toBeDefined();
+    expect((jsonData(first) as Record<string, unknown>).access_token).toBeDefined();
 
     // Second exchange must fail (code already consumed)
     const second = await harness.post("/oauth/token", {
@@ -184,7 +185,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code_verifier: verifier,
     });
     expect(second.status).toBe(400);
-    expect((second.data as Record<string, unknown>).error).toBe("invalid_grant");
+    expect((jsonData(second) as Record<string, unknown>).error).toBe("invalid_grant");
   });
 
   test("refresh_token grant issues new tokens and preserves user", async () => {
@@ -194,7 +195,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const loginRes = await harness.post("/login", {
       email: TEST_USER.email,
@@ -203,7 +204,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code_challenge: challenge,
       client_id: clientId,
     });
-    const code = new URL((loginRes.data as { redirectUrl: string }).redirectUrl)
+    const code = new URL((jsonData(loginRes) as { redirectUrl: string }).redirectUrl)
       .searchParams.get("code")!;
 
     const tokenRes = await harness.post("/oauth/token", {
@@ -211,7 +212,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       code,
       code_verifier: verifier,
     });
-    const { refresh_token } = tokenRes.data as Record<string, string>;
+    const { refresh_token } = jsonData(tokenRes) as Record<string, string>;
 
     // Use the refresh token
     const refreshRes = await harness.post("/oauth/token", {
@@ -219,7 +220,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       refresh_token,
     });
     expect(refreshRes.type).toBe("json");
-    const refreshed = refreshRes.data as Record<string, unknown>;
+    const refreshed = jsonData(refreshRes) as Record<string, unknown>;
     expect(typeof refreshed.access_token).toBe("string");
     expect(typeof refreshed.refresh_token).toBe("string");
 
@@ -233,7 +234,7 @@ describe("built-in OAuth — full authorization_code flow", () => {
       refresh_token,
     });
     expect(reuseRes.status).toBe(400);
-    expect((reuseRes.data as Record<string, unknown>).error).toBe("invalid_grant");
+    expect((jsonData(reuseRes) as Record<string, unknown>).error).toBe("invalid_grant");
   });
 });
 
@@ -243,7 +244,7 @@ describe("built-in OAuth — /login guard rails", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const res = await harness.post("/login", {
       email: TEST_USER.email,
@@ -253,7 +254,7 @@ describe("built-in OAuth — /login guard rails", () => {
       client_id: clientId,
     });
     expect(res.status).toBe(400);
-    expect((res.data as Record<string, unknown>).error).toBe("invalid_request");
+    expect((jsonData(res) as Record<string, unknown>).error).toBe("invalid_request");
   });
 
   test("login rejects invalid credentials", async () => {
@@ -262,7 +263,7 @@ describe("built-in OAuth — /login guard rails", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const res = await harness.post("/login", {
       email: TEST_USER.email,
@@ -280,7 +281,7 @@ describe("built-in OAuth — /login guard rails", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const res = await harness.post("/login", {
       email: TEST_USER.email,
@@ -290,7 +291,7 @@ describe("built-in OAuth — /login guard rails", () => {
       client_id: clientId,
     });
     expect(res.status).toBe(400);
-    expect((res.data as Record<string, unknown>).error).toBe("invalid_redirect_uri");
+    expect((jsonData(res) as Record<string, unknown>).error).toBe("invalid_redirect_uri");
   });
 
   test("state parameter is forwarded to the redirect URL", async () => {
@@ -299,7 +300,7 @@ describe("built-in OAuth — /login guard rails", () => {
     const regRes = await harness.post("/register", {
       redirect_uris: ["https://client.example/callback"],
     });
-    const clientId = (regRes.data as Record<string, unknown>).client_id as string;
+    const clientId = (jsonData(regRes) as Record<string, unknown>).client_id as string;
 
     const res = await harness.post("/login", {
       email: TEST_USER.email,
@@ -309,7 +310,7 @@ describe("built-in OAuth — /login guard rails", () => {
       client_id: clientId,
       state: "csrf-token-xyz",
     });
-    const url = new URL((res.data as { redirectUrl: string }).redirectUrl);
+    const url = new URL((jsonData(res) as { redirectUrl: string }).redirectUrl);
     expect(url.searchParams.get("state")).toBe("csrf-token-xyz");
   });
 });

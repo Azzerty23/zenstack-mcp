@@ -154,6 +154,52 @@ const user = getRequestUser()
 
 Creates a default in-memory token store. Replace with a persistent implementation for production.
 
+## Security
+
+Read this before deploying — two points are easy to get wrong and both bypass data protection silently.
+
+### `getClient` **must** return a policy-enforced (enhanced) client
+
+The `execute` tool runs the operation it is given directly on whatever `getClient` returns.
+**All data-access authorization lives in your ZenStack access policies, enforced by the
+enhanced client — not in this package.** If `getClient` returns a *raw* ORM client, every
+authenticated user gets unrestricted read/write access to your entire database through `execute`.
+
+```typescript
+// ✅ Correct — policies are enforced
+getClient: async (user) => db.withPolicy(new PolicyPlugin({ user }))
+
+// ❌ Wrong — NO access control: every authenticated caller can read/write everything
+getClient: async (user) => db
+```
+
+When `getClient` is called outside an authenticated context the user is `undefined`, which
+ZenStack treats as an anonymous caller — so your policies must also be correct for the
+anonymous case (`@@allow('read', true)` etc.).
+
+### Model exposure is *not* an authorization boundary
+
+`@@mcp(false)`, `mcpConfig`, `include`, `exclude` and `modelOperations` only reduce the surface
+the MCP tools *advertise*. They do **not** restrict what the database can return:
+
+- A model hidden from MCP is still reachable through a relation `include`/`select` from an
+  exposed model (subject to your policies).
+- These options are a usability/ergonomics filter, not a security control.
+
+**Always enforce real protection with ZenStack access policies.** Treat exposure config as
+"what the AI sees first", and policies as "what the AI is actually allowed to touch".
+
+### Other hardening options
+
+| Option | Recommendation |
+|--------|----------------|
+| `requireWhereForBulk: true` | Enable in production — rejects `deleteMany`/`updateMany` with an empty `where`, so an LLM can't wipe a whole table. |
+| `initialAccessToken` | Set for the built-in OAuth server — otherwise `/register` is open to anyone. Registered clients also expire after `clientTtl` (default 24h) to prevent registry exhaustion. |
+| `allowedOrigins` | Set when the server may be reached from a browser — rejects requests from any other `Origin` (DNS-rebinding protection). Native clients send no `Origin` and are unaffected. |
+| `jwtSecret` / better-auth `secret` | Must be ≥ 32 characters (enforced). Use a high-entropy random value. |
+| `transport` | Keep the default `"streamable-http"` for serverless/multi-instance hosts. `"sse"`/`"both"` keeps sessions in per-instance memory and **only works on a single instance**. |
+| better-auth stateless mode | Access tokens (default 1h) and refresh tokens are **not** individually revocable until they expire — revoking the underlying better-auth session is caught only at refresh time. Use short TTLs, `stateful: true` for immediate revocation (single-instance), or pass `refreshTokenReuse` to make refresh tokens one-time-use (rotation with stolen-token replay detection). |
+
 ## License
 
 MIT

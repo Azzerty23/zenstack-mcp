@@ -13,6 +13,9 @@ export async function signToken(payload: unknown, secret: string, ttlSeconds: nu
 }
 
 export async function verifyToken(token: string, secret: string): Promise<unknown> {
-  const { payload } = await jwtVerify(token, secretKey(secret))
+  // Pin the accepted algorithm to HS256. jose already rejects `alg: none` and,
+  // with a symmetric key, asymmetric algs — but pinning prevents a token signed
+  // with HS384/HS512 from being accepted and makes the contract explicit.
+  const { payload } = await jwtVerify(token, secretKey(secret), { algorithms: ['HS256'] })
   return (payload as Record<string, unknown>).data
 }

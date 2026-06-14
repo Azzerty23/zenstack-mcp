@@ -118,6 +118,84 @@ describe("OAuth redirect URI validation", () => {
   });
 });
 
+describe("OAuth client registry limits", () => {
+  const REDIRECT = ["https://app.example/callback"];
+
+  test("enforces maxClients cap with 429", async () => {
+    const { router, post } = createRouterHarness();
+    mountOAuthRoutes(router, {
+      jwtSecret: "x".repeat(32),
+      validateCredentials: async () => null,
+      maxClients: 2,
+    });
+
+    expect(await post("/register", { redirect_uris: REDIRECT })).toMatchObject({ status: 201 });
+    expect(await post("/register", { redirect_uris: REDIRECT })).toMatchObject({ status: 201 });
+    expect(await post("/register", { redirect_uris: REDIRECT })).toMatchObject({
+      status: 429,
+      data: { error: "too_many_clients" },
+    });
+  });
+
+  test("initialAccessToken gates registration before the cap", async () => {
+    const { router, post } = createRouterHarness();
+    mountOAuthRoutes(router, {
+      jwtSecret: "x".repeat(32),
+      validateCredentials: async () => null,
+      initialAccessToken: "secret-iat",
+    });
+
+    expect(await post("/register", { redirect_uris: REDIRECT })).toMatchObject({
+      status: 401,
+      data: { error: "invalid_token" },
+    });
+    expect(
+      await post(
+        "/register",
+        { redirect_uris: REDIRECT },
+        { authorization: "Bearer secret-iat" },
+      ),
+    ).toMatchObject({ status: 201 });
+  });
+
+  test("expired clients are evicted, freeing registry slots", async () => {
+    const { router, post } = createRouterHarness();
+    mountOAuthRoutes(router, {
+      jwtSecret: "x".repeat(32),
+      validateCredentials: async () => null,
+      maxClients: 1,
+      clientTtl: 0, // every client expires immediately
+    });
+
+    expect(await post("/register", { redirect_uris: REDIRECT })).toMatchObject({ status: 201 });
+    // Let wall-clock advance past the (zero) TTL so purge evicts the first client.
+    await new Promise((r) => setTimeout(r, 10));
+    // Without eviction this would be 429; the purge frees the slot.
+    expect(await post("/register", { redirect_uris: REDIRECT })).toMatchObject({ status: 201 });
+  });
+
+  test("/login rejects an unknown client_id with invalid_client", async () => {
+    const { router, post } = createRouterHarness();
+    mountOAuthRoutes(router, {
+      jwtSecret: "x".repeat(32),
+      validateCredentials: async () => ({ id: "u1" }),
+    });
+
+    const response = await post("/login", {
+      email: "a@b.c",
+      password: "pw",
+      redirect_uri: REDIRECT[0],
+      code_challenge: "challenge",
+      client_id: "never-registered",
+    });
+
+    expect(response).toMatchObject({
+      status: 400,
+      data: { error: "invalid_client" },
+    });
+  });
+});
+
 describe("betterAuthMcpAdapter secret validation", () => {
   test("rejects insecure stateless secrets", () => {
     expect(() =>

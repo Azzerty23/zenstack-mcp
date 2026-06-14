@@ -238,6 +238,12 @@ export interface RefreshTokenPayload {
   /** The opaque better-auth session token — passed to getSession() on refresh. */
   sessionToken: string
   exp: number
+  /**
+   * Unique token id. Present on tokens issued by current versions; lets an
+   * optional reuse-detection store track one-time-use rotation. Optional so
+   * tokens minted before this field was added still verify until they expire.
+   */
+  jti?: string
 }
 
 /**

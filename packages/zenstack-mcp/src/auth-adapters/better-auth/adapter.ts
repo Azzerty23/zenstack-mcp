@@ -4,6 +4,7 @@ import {
   createInMemoryTokenStore,
   pkceVerify,
   randomCode,
+  randomToken,
 } from "../oauth/store.js";
 import { normalizeRedirectUris } from "../oauth/redirect-uri.js";
 import {
@@ -90,6 +91,23 @@ export function betterAuthMcpAdapter(
      * so revocations take effect at refresh time. Defaults to 30 days.
      */
     refreshTokenExpiresIn?: number;
+    /**
+     * Optional store that turns stateless refresh tokens into one-time-use tokens
+     * (rotation with reuse detection). Stateless refresh tokens are otherwise
+     * replayable until they expire — a leaked token works repeatedly for the full
+     * `refreshTokenExpiresIn` window.
+     *
+     * When provided, each refresh exchange records the consumed token id and rejects
+     * any token whose id was already consumed (the hallmark of a stolen-token replay).
+     * Back it with Redis or a database for multi-instance deployments; expire entries
+     * at the `expiresAtMs` passed to `consume`.
+     */
+    refreshTokenReuse?: {
+      /** Returns true if this token id was already consumed (→ reject as reuse). */
+      isConsumed(jti: string): Promise<boolean>;
+      /** Record a token id as consumed. `expiresAtMs` is when it may be forgotten. */
+      consume(jti: string, expiresAtMs: number): Promise<void>;
+    };
   },
 ): McpAuthAdapter {
   const base = auth.options.baseURL;
@@ -154,7 +172,11 @@ export function betterAuthMcpAdapter(
             secret,
           );
           const refreshToken = await signRefreshToken(
-            { sessionToken, exp: Date.now() + refreshTokenExpiresIn * 1000 },
+            {
+              sessionToken,
+              exp: Date.now() + refreshTokenExpiresIn * 1000,
+              jti: randomToken(),
+            },
             secret,
           );
           return encryptCode(
@@ -393,6 +415,17 @@ export function betterAuthMcpAdapter(
               status: 400,
               data: { error: "invalid_grant" },
             };
+          // One-time-use rotation (opt-in): reject a token id we've already seen — the
+          // signature of a stolen-token replay — then mark this one consumed.
+          if (options?.refreshTokenReuse && rtPayload.jti) {
+            if (await options.refreshTokenReuse.isConsumed(rtPayload.jti))
+              return {
+                type: "json",
+                status: 400,
+                data: { error: "invalid_grant" },
+              };
+            await options.refreshTokenReuse.consume(rtPayload.jti, rtPayload.exp);
+          }
           // One DB call — validates the session is still alive and gets fresh user data.
           const session = await auth.api.getSession({
             headers: new Headers({
@@ -410,7 +443,11 @@ export function betterAuthMcpAdapter(
             secret,
           );
           const newRefreshToken = await signRefreshToken(
-            { sessionToken: rtPayload.sessionToken, exp: rtPayload.exp },
+            {
+              sessionToken: rtPayload.sessionToken,
+              exp: rtPayload.exp,
+              jti: randomToken(),
+            },
             secret,
           );
           return {

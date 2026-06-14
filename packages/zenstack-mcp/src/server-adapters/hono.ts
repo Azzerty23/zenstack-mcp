@@ -17,6 +17,7 @@ import {
 import { extractModels, buildMcpServer } from "../server.js";
 import type { AuthType } from "@zenstackhq/orm";
 import { requestContext } from "../context.js";
+import { isOriginAllowed } from "./origin.js";
 
 function resolveAuthAdapter(
   auth: McpAuthAdapter | McpBuiltInAuthOptions,
@@ -85,6 +86,13 @@ function honoRouterAdapter(app: Hono<Env>): RouterAdapter {
  * app.route('/', oauthRoutes)     // /.well-known/*, /oauth/*, /login, /register
  * app.route('/mcp', mcpMiddleware) // POST /mcp/ → MCP transport (requires Bearer)
  * ```
+ *
+ * @remarks
+ * The default `"streamable-http"` transport is stateless and serverless-safe.
+ * `transport: "sse"`/`"both"` stores sessions in a per-instance in-memory map and
+ * must only be used on a single-instance deployment — on Cloudflare Workers,
+ * Lambda or any autoscaled host, follow-up SSE messages routed to another instance
+ * fail with "unknown session".
  */
 export function createHonoMcpHandler<Schema extends SchemaDef>(
   config: McpServerConfig<Schema>,
@@ -100,11 +108,26 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
   const mcpApp = new Hono<Env>();
 
   mcpApp.use("/*", async (c, next) => {
+    // DNS-rebinding guard: reject browser requests from a disallowed Origin (no-op
+    // when allowedOrigins is unset, and native clients send no Origin header).
+    if (!isOriginAllowed(c.req.header("Origin"), config.allowedOrigins)) {
+      return c.json(
+        { error: "forbidden", error_description: "Origin not allowed" },
+        403,
+      );
+    }
+
+    // Point unauthenticated clients at the protected-resource metadata so they can
+    // discover the authorization server (MCP Authorization spec / RFC 9728).
+    const resourceMetadata = `${new URL(c.req.url).origin}/.well-known/oauth-protected-resource`;
+    const wwwAuthenticate = `Bearer resource_metadata="${resourceMetadata}"`;
+
     const authHeader = c.req.header("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return c.json(
         { error: "unauthorized", error_description: "Bearer token required" },
         401,
+        { "WWW-Authenticate": wwwAuthenticate },
       );
     }
 
@@ -113,7 +136,9 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
       const user = await authAdapter.validateToken(token);
       c.set("user", user);
     } catch {
-      return c.json({ error: "invalid_token" }, 401);
+      return c.json({ error: "invalid_token" }, 401, {
+        "WWW-Authenticate": wwwAuthenticate,
+      });
     }
 
     return next();

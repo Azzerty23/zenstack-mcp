@@ -8,11 +8,32 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
   const ttl = options.tokenTtl ?? 3600
   const refreshTtl = options.refreshTokenTtl ?? 30 * 24 * 3600
   const maxClients = options.maxClients ?? 100
+  const clientTtl = (options.clientTtl ?? 24 * 3600) * 1000
   const store = options.tokenStore ?? createInMemoryTokenStore()
   // Persists redirect_uris declared at registration time so that /login and /oauth/authorize
   // can validate the redirect_uri against this allowlist — prevents open redirect attacks where
   // a crafted redirect_uri would redirect the authorization code to an attacker-controlled URI.
-  const clientRegistry = new Map<string, string[]>() // client_id → registered redirect_uris
+  const clientRegistry = new Map<string, { redirectUris: string[]; expiresAt: number }>()
+
+  // Evict clients that outlived clientTtl. Without this, an open /register endpoint lets an
+  // unauthenticated caller fill the registry to maxClients and permanently lock out new clients.
+  function purgeExpiredClients(): void {
+    const now = Date.now()
+    for (const [id, entry] of clientRegistry) {
+      if (now > entry.expiresAt) clientRegistry.delete(id)
+    }
+  }
+
+  // Returns the registered redirect_uris for a client, or undefined if unknown/expired.
+  function getClientUris(clientId: string): string[] | undefined {
+    const entry = clientRegistry.get(clientId)
+    if (!entry) return undefined
+    if (Date.now() > entry.expiresAt) {
+      clientRegistry.delete(clientId)
+      return undefined
+    }
+    return entry.redirectUris
+  }
 
   router.get('/.well-known/oauth-authorization-server', (req) => ({
     type: 'json',
@@ -38,21 +59,22 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
   }))
 
   router.post('/register', async (req) => {
-    if (clientRegistry.size >= maxClients)
-      return { type: 'json', status: 429, data: { error: 'too_many_clients' } }
-
     if (options.initialAccessToken) {
       const expected = `Bearer ${options.initialAccessToken}`
       if (req.authorization !== expected)
         return { type: 'json', status: 401, data: { error: 'invalid_token' } }
     }
 
+    purgeExpiredClients()
+    if (clientRegistry.size >= maxClients)
+      return { type: 'json', status: 429, data: { error: 'too_many_clients' } }
+
     const body = await req.body()
     const clientId = crypto.randomUUID()
     const redirectUris = normalizeRedirectUris(body.redirect_uris)
     if (!redirectUris)
       return { type: 'json', status: 400, data: { error: 'invalid_redirect_uri' } }
-    clientRegistry.set(clientId, redirectUris)
+    clientRegistry.set(clientId, { redirectUris, expiresAt: Date.now() + clientTtl })
     return {
       type: 'json',
       status: 201,
@@ -79,7 +101,7 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
       return { type: 'json', status: 400, data: { error: 'unsupported_response_type' } }
     if (code_challenge_method && code_challenge_method !== 'S256')
       return { type: 'json', status: 400, data: { error: 'invalid_request', error_description: 'Only S256 code_challenge_method is supported' } }
-    const allowedUris = clientRegistry.get(String(client_id))
+    const allowedUris = getClientUris(String(client_id))
     if (!allowedUris)
       return { type: 'json', status: 400, data: { error: 'invalid_client' } }
     if (!allowedUris.includes(String(redirect_uri)))
@@ -102,7 +124,7 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
 
     // Validate again at login time: the form could bypass /oauth/authorize and POST directly
     // with an arbitrary redirect_uri, so the allowlist check must be enforced here too.
-    const allowedUris = client_id ? clientRegistry.get(String(client_id)) : undefined
+    const allowedUris = client_id ? getClientUris(String(client_id)) : undefined
     if (!allowedUris)
       return { type: 'json', status: 400, data: { error: 'invalid_client' } }
     if (!allowedUris.includes(String(redirect_uri)))

@@ -163,6 +163,16 @@ export interface McpBuiltInAuthOptions {
   initialAccessToken?: string;
   /** Maximum number of OAuth clients that can be registered (default: 100). */
   maxClients?: number;
+  /**
+   * Time-to-live for a registered OAuth client, in seconds (default: 86400 = 24h).
+   *
+   * Registered clients are evicted once they exceed this TTL. Without it, an open
+   * `/register` endpoint (no `initialAccessToken`) lets an unauthenticated caller
+   * fill the registry to `maxClients` and permanently lock out new registrations.
+   * MCP clients re-register dynamically, so an expired client_id simply triggers a
+   * fresh registration.
+   */
+  clientTtl?: number;
 }
 
 /**
@@ -187,7 +197,16 @@ export interface McpServerConfig<Schema extends SchemaDef> {
   include?: string[];
   /** Blacklist of model names to hide (used when mcpConfig is absent) */
   exclude?: string[];
-  /** MCP transport to expose (default: "streamable-http"). Express only supports "streamable-http". */
+  /**
+   * MCP transport to expose (default: "streamable-http").
+   *
+   * - `"streamable-http"` — stateless (a fresh server per request); the only
+   *   serverless-safe option and the only one Express supports.
+   * - `"sse"` / `"both"` — keeps SSE sessions in a per-instance in-memory map, so
+   *   a follow-up message routed to a different instance fails with "unknown
+   *   session". **Only use SSE on a single-instance deployment** (not Cloudflare
+   *   Workers, Lambda, or any autoscaled/multi-replica host).
+   */
   transport?: "streamable-http" | "sse" | "both";
   /** MCP server name reported to clients (default: "zenstack-mcp") */
   name?: string;
@@ -215,4 +234,19 @@ export interface McpServerConfig<Schema extends SchemaDef> {
    * Defaults to `false`. Enable explicitly in production.
    */
   requireWhereForBulk?: boolean;
+  /**
+   * Browser-origin allowlist for the MCP endpoint, guarding against DNS-rebinding
+   * attacks (a malicious web page driving a localhost/private MCP server from the
+   * victim's browser), as recommended by the MCP Streamable HTTP transport spec.
+   *
+   * Requests that carry an `Origin` header not in this list are rejected with 403.
+   * Requests with **no** `Origin` header are allowed — native MCP clients (Claude
+   * Desktop, CLIs) don't send one; only browsers do. Provide a predicate for
+   * dynamic matching.
+   *
+   * When omitted, no Origin check is performed (backward compatible).
+   *
+   * @example allowedOrigins: ['https://claude.ai']
+   */
+  allowedOrigins?: string[] | ((origin: string) => boolean);
 }
