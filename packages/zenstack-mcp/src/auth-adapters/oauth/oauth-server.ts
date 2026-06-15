@@ -1,4 +1,4 @@
-import type { RouterAdapter, McpBuiltInAuthOptions } from '../../types.js'
+import type { RouterAdapter, McpBuiltInAuthOptions, GenericRequest, GenericResponse } from '../../types.js'
 import { createInMemoryTokenStore, pkceVerify, randomCode, randomToken } from './store.js'
 import { signToken } from './jwt.js'
 import { normalizeRedirectUris } from './redirect-uri.js'
@@ -49,14 +49,22 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
     },
   }))
 
-  router.get('/.well-known/oauth-protected-resource', (req) => ({
+  const protectedResourceMetadata = (req: GenericRequest): GenericResponse => ({
     type: 'json',
     data: {
       resource: req.origin,
       authorization_servers: [req.origin],
       bearer_methods_supported: ['header'],
     },
-  }))
+  })
+
+  router.get('/.well-known/oauth-protected-resource', protectedResourceMetadata)
+
+  // RFC 9728 §3.1: clients probe the path-specific metadata
+  // (/.well-known/oauth-protected-resource/<resource>) before falling back to the
+  // root. Register the single-segment variant so common mounts (e.g. /mcp) don't
+  // 404. `:resource` is the syntax shared by both Hono and Express 5 routers.
+  router.get('/.well-known/oauth-protected-resource/:resource', protectedResourceMetadata)
 
   router.post('/register', async (req) => {
     if (options.initialAccessToken) {

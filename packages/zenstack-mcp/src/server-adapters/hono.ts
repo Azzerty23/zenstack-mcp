@@ -181,6 +181,20 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
     });
 
     mcpApp.delete("/", (c) => c.json({ ok: true }));
+
+    // MCP Streamable HTTP: clients issue GET to open a server→client SSE stream.
+    // Stateless JSON mode offers no such stream, so the spec mandates 405 (not 404);
+    // clients handle it gracefully by staying POST-only.
+    mcpApp.get("/", (c) =>
+      c.json(
+        {
+          error: "method_not_allowed",
+          error_description: "GET SSE stream not supported",
+        },
+        405,
+        { Allow: "POST, DELETE" },
+      ),
+    );
   }
 
   if (transport === "sse" || transport === "both") {

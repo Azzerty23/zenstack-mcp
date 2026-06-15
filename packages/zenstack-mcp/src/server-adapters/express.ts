@@ -166,5 +166,15 @@ export function createExpressMcpHandler<Schema extends SchemaDef>(
     },
   );
 
+  // MCP Streamable HTTP: clients issue GET to open a server→client SSE stream.
+  // Stateless mode offers no such stream, so the spec mandates 405 (not 404);
+  // clients handle it gracefully by staying POST-only.
+  mcpRouter.get("/", (_req: Request, res: Response) => {
+    res.status(405).set("Allow", "POST").json({
+      error: "method_not_allowed",
+      error_description: "GET SSE stream not supported",
+    });
+  });
+
   return { oauthRoutes: oauthRouter, mcpMiddleware: mcpRouter };
 }
