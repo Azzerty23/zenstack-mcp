@@ -132,6 +132,46 @@ export interface TokenStore {
   revokeRefreshToken(token: string): Promise<void>;
 }
 
+/**
+ * A model mutation — the single currency for realtime across the app (oRPC SSE)
+ * and the MCP protocol. Structurally identical to `@viiite/server`'s
+ * `ModelMutationEvent`, so the same event flows through one publisher and feeds
+ * both planes.
+ */
+export interface ModelMutationEvent<T = unknown> {
+  /** Type of mutation. */
+  operation: "create" | "update" | "delete";
+  /** Model name (e.g. "Post", "User"). */
+  modelName: string;
+  /** The mutated record(s), when available (single-record operations). */
+  data?: T;
+  /** IDs of affected records, when derivable. */
+  ids?: (string | number)[];
+  /** Unix timestamp in ms. */
+  timestamp: number;
+}
+
+/**
+ * Channel-based pub/sub port for model mutations. **Structurally identical** to
+ * `@viiite/server`'s `Publisher<ModelMutationEvent>` — pass that instance
+ * (including a Durable-Object-backed one) directly so mutations have a single
+ * source of truth shared by the app's oRPC SSE subscriptions and the MCP server.
+ *
+ * The default {@link createInMemoryPublisher} is correct for a single
+ * long-running process (Bun/Node). Serverless or multi-instance deployments
+ * (Cloudflare Workers, Lambda) must supply a distributed implementation
+ * (Durable Object, Redis pub/sub, Postgres LISTEN/NOTIFY).
+ */
+export interface MutationPublisher<TEvent = ModelMutationEvent> {
+  /** Publish an event to a channel. */
+  publish(channel: string, event: TEvent): Promise<void>;
+  /** Subscribe to a channel; iterate until the (optional) signal aborts. */
+  subscribe(
+    channel: string,
+    options?: { signal?: AbortSignal; lastEventId?: string },
+  ): AsyncIterable<TEvent>;
+}
+
 /** Options for the built-in OAuth strategy */
 export interface McpBuiltInAuthOptions {
   /** Called on POST /login to validate credentials; return user object or null */
@@ -249,4 +289,21 @@ export interface McpServerConfig<Schema extends SchemaDef> {
    * @example allowedOrigins: ['https://claude.ai']
    */
   allowedOrigins?: string[] | ((origin: string) => boolean);
+  /**
+   * Pub/sub publisher for model mutations. When set, the `execute` tool publishes
+   * a {@link ModelMutationEvent} after every successful write (create/update/
+   * delete), so subscribers — the app's realtime SSE and (later) MCP-protocol
+   * push — observe writes made by the LLM.
+   *
+   * Pass the **same** publisher instance the rest of your app uses (e.g.
+   * `@viiite/server`'s `Publisher`, or its Durable-Object-backed variant) to keep
+   * a single source of truth. When omitted, no mutation events are published.
+   */
+  publisher?: MutationPublisher;
+  /**
+   * Maps a model name to its publish channel. Must match the convention used by
+   * your subscribers. Defaults to `modelName.toLowerCase()` — the same default as
+   * `@viiite/server`.
+   */
+  channelFormatter?: (modelName: string) => string;
 }
