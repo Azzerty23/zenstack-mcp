@@ -146,6 +146,131 @@ describe("execute tool — dispatch", () => {
   });
 });
 
+describe("execute tool — mutation publishing", () => {
+  function recordingPublisher() {
+    const published: Array<{ channel: string; event: Record<string, unknown> }> =
+      [];
+    return {
+      published,
+      publish: async (channel: string, event: Record<string, unknown>) => {
+        published.push({ channel, event });
+      },
+      subscribe: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ value: undefined, done: true as const }) }) }),
+    };
+  }
+
+  test("create publishes a create mutation with data and ids on the lowercased channel", async () => {
+    const created = { id: "7", email: "neo@example.com" };
+    const pub = recordingPublisher();
+    const server = buildMockServer();
+    registerExecuteTool(
+      server as never,
+      mockModels,
+      async () => ({ user: { create: async () => created } }) as never,
+      passAllFactory,
+      undefined,
+      pub as never,
+    );
+
+    await server.call({
+      model: "User",
+      operation: "create",
+      args: { data: { email: "neo@example.com" } },
+    });
+
+    expect(pub.published).toHaveLength(1);
+    expect(pub.published[0]!.channel).toBe("user");
+    expect(pub.published[0]!.event).toMatchObject({
+      operation: "create",
+      modelName: "User",
+      data: created,
+      ids: ["7"],
+    });
+  });
+
+  test("delete derives ids from the where clause", async () => {
+    const pub = recordingPublisher();
+    const server = buildMockServer();
+    registerExecuteTool(
+      server as never,
+      mockModels,
+      async () => ({ user: { delete: async () => ({ id: "3" }) } }) as never,
+      passAllFactory,
+      undefined,
+      pub as never,
+    );
+
+    await server.call({
+      model: "User",
+      operation: "delete",
+      args: { where: { id: "3" } },
+    });
+
+    expect(pub.published[0]!.event).toMatchObject({
+      operation: "delete",
+      ids: ["3"],
+    });
+  });
+
+  test("read operations do not publish", async () => {
+    const pub = recordingPublisher();
+    const server = buildMockServer();
+    registerExecuteTool(
+      server as never,
+      mockModels,
+      async () => ({ user: { findMany: async () => [] } }) as never,
+      passAllFactory,
+      undefined,
+      pub as never,
+    );
+
+    await server.call({ model: "User", operation: "findMany", args: {} });
+    expect(pub.published).toHaveLength(0);
+  });
+
+  test("a custom channelFormatter is honored", async () => {
+    const pub = recordingPublisher();
+    const server = buildMockServer();
+    registerExecuteTool(
+      server as never,
+      mockModels,
+      async () => ({ user: { create: async () => ({ id: "1" }) } }) as never,
+      passAllFactory,
+      undefined,
+      pub as never,
+      (model) => `model:${model}`,
+    );
+
+    await server.call({ model: "User", operation: "create", args: { data: {} } });
+    expect(pub.published[0]!.channel).toBe("model:User");
+  });
+
+  test("a failing publisher does not fail the write", async () => {
+    const server = buildMockServer();
+    registerExecuteTool(
+      server as never,
+      mockModels,
+      async () => ({ user: { create: async () => ({ id: "1" }) } }) as never,
+      passAllFactory,
+      undefined,
+      {
+        publish: async () => {
+          throw new Error("publisher down");
+        },
+        subscribe: () => ({ [Symbol.asyncIterator]: () => ({ next: async () => ({ value: undefined, done: true as const }) }) }),
+      } as never,
+    );
+
+    const result = await server.call({
+      model: "User",
+      operation: "create",
+      args: { data: {} },
+    });
+    expect(result.isError).toBeUndefined();
+    expect(parseText(result).success).toBe(true);
+  });
+});
+
 describe("execute tool — request context", () => {
   test("getClient receives the user from requestContext", async () => {
     const expectedUser = { id: "ctx-user", email: "bob@example.com" };

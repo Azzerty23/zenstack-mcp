@@ -141,6 +141,8 @@ export function buildMcpServer<Schema extends SchemaDef>(
     config.getClient,
     factory as Parameters<typeof registerExecuteTool>[3],
     config.requireWhereForBulk,
+    config.publisher,
+    config.channelFormatter,
   );
 
   return server;

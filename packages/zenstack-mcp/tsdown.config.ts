@@ -5,6 +5,7 @@ export default defineConfig({
     index: 'index.ts',
     'server-adapters/hono': 'src/server-adapters/hono.ts',
     'server-adapters/express': 'src/server-adapters/express.ts',
+    'server-adapters/workers': 'src/server-adapters/workers.ts',
     'auth-adapters/better-auth': 'src/auth-adapters/better-auth/adapter.ts',
     server: 'src/server.ts',
     plugin: 'src/plugin/index.ts',
@@ -13,7 +14,7 @@ export default defineConfig({
   dts: true,
   clean: true,
   deps: {
-    neverBundle: ['@zenstackhq/sdk', '@zenstackhq/language', 'langium', 'express', 'hono', 'zod', 'better-auth'],
+    neverBundle: ['@zenstackhq/sdk', '@zenstackhq/language', 'langium', 'express', 'hono', 'zod', 'better-auth', 'agents', 'agents/mcp', '@cloudflare/workers-oauth-provider'],
     onlyBundle: false,
   },
   exports: {

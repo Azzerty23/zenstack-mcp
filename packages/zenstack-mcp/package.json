@@ -49,6 +49,10 @@
       "bun": "./src/server-adapters/hono.ts",
       "default": "./dist/server-adapters/hono.mjs"
     },
+    "./server-adapters/workers": {
+      "bun": "./src/server-adapters/workers.ts",
+      "default": "./dist/server-adapters/workers.mjs"
+    },
     "./package.json": "./package.json",
     "./plugin.zmodel": "./dist/plugin.zmodel",
     "./plugin/plugin.zmodel": "./dist/plugin.zmodel"
@@ -64,27 +68,38 @@
     "jose": "^6.2.3"
   },
   "devDependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.8.0",
+    "@cloudflare/workers-types": "^4.20260615.1",
     "@types/bun": "latest",
     "@types/express": "^5.0.6",
     "@zenstackhq/language": "^3.7.0",
-    "langium": "^3.5.0",
     "@zenstackhq/plugin-policy": "^3.7.0",
     "@zenstackhq/schema": "^3.7.0",
     "@zenstackhq/sdk": "^3.7.0",
+    "agents": "^0.16.0",
     "hono": "^4.12.18",
+    "langium": "^3.5.0",
     "tsdown": "^0.22.0"
   },
   "peerDependencies": {
+    "@cloudflare/workers-oauth-provider": "^0.8.0",
     "@zenstackhq/orm": "^3.7.0",
     "@zenstackhq/plugin-policy": "^3.7.0",
     "@zenstackhq/schema": "^3.7.0",
     "@zenstackhq/sdk": "^3.7.0",
+    "agents": "^0.16.0",
     "better-auth": "*",
     "express": "^5.x",
     "hono": "^4.x",
     "zod": "^4.0.0"
   },
   "peerDependenciesMeta": {
+    "@cloudflare/workers-oauth-provider": {
+      "optional": true
+    },
+    "agents": {
+      "optional": true
+    },
     "better-auth": {
       "optional": true
     },
@@ -115,6 +130,7 @@
       "./server": "./dist/server.mjs",
       "./server-adapters/express": "./dist/server-adapters/express.mjs",
       "./server-adapters/hono": "./dist/server-adapters/hono.mjs",
+      "./server-adapters/workers": "./dist/server-adapters/workers.mjs",
       "./package.json": "./package.json",
       "./plugin.zmodel": "./dist/plugin.zmodel",
       "./plugin/plugin.zmodel": "./dist/plugin.zmodel"
