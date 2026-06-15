@@ -1,0 +1,100 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Generates mcp-config.ts — controls which models the MCP server exposes
+plugin mcp {
+  provider = "zenstack-mcp"
+  output   = "zenstack"
+}
+
+plugin policy {
+  provider = "@zenstackhq/plugin-policy"
+}
+
+// ── better-auth tables ────────────────────────────────────────────────────────
+// These are managed entirely by better-auth via the raw (un-enhanced) Prisma
+// client. Hide them from the MCP server with @@mcp(false) so Claude cannot
+// read or modify sessions, accounts, or verification tokens.
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean
+  image         String?
+  createdAt     DateTime
+  updatedAt     DateTime
+  sessions      Session[]
+  accounts      Account[]
+  posts         Post[]
+
+  // Authenticated users can read any user profile; only self-update allowed.
+  @@allow('read', auth() != null)
+  @@allow('update', auth() == this)
+
+  @@auth()
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime
+  updatedAt DateTime
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@mcp(false)
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+
+  @@mcp(false)
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@mcp(false)
+}
+
+// ── Application models ────────────────────────────────────────────────────────
+
+model Post {
+  id        String  @id @default(cuid())
+  title     String
+  content   String?
+  published Boolean @default(false)
+  author    User    @relation(fields: [authorId], references: [id])
+  authorId  String
+
+  // Published posts are readable by anyone authenticated.
+  // Only the author can create, update, or delete their own posts.
+  @@allow('read', published || auth() == author)
+  @@allow('create,update,delete', auth() == author)
+
+  @@map("posts")
+}

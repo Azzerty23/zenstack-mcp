@@ -1,11 +1,12 @@
 {
-  "name": "zenstack-mcp",
-  "module": "index.ts",
+  "name": "zenstack-mcp-monorepo",
+  "private": true,
   "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+  "workspaces": [
+    "packages/*",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "bun run --filter './packages/*' build"
   }
 }

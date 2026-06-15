@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign in — Express Example</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      padding: 1rem;
+    }
+
+    .wrapper { width: 100%; max-width: 380px; }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      justify-content: center;
+      margin-bottom: 2rem;
+    }
+
+    .brand-name {
+      font-size: 1.125rem;
+      font-weight: 700;
+      color: #e2e8f0;
+      letter-spacing: -0.02em;
+    }
+
+    .badge {
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: #94a3b8;
+      background: rgba(148,163,184,.12);
+      border: 1px solid rgba(148,163,184,.2);
+      border-radius: 4px;
+      padding: 2px 6px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .card {
+      background: rgba(255,255,255,.04);
+      border: 1px solid rgba(255,255,255,.1);
+      border-radius: 14px;
+      padding: 2rem;
+      backdrop-filter: blur(12px);
+    }
+
+    .card-header { margin-bottom: 1.5rem; }
+
+    .card-header h1 {
+      font-size: 1.25rem;
+      font-weight: 600;
+      color: #f1f5f9;
+      letter-spacing: -0.02em;
+    }
+
+    .card-header p {
+      font-size: 0.8125rem;
+      color: #94a3b8;
+      margin-top: 4px;
+    }
+
+    .field { margin-bottom: 1rem; }
+
+    label {
+      display: block;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      color: #cbd5e1;
+      margin-bottom: 6px;
+    }
+
+    input[type="email"],
+    input[type="password"] {
+      width: 100%;
+      padding: 10px 12px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      color: #f1f5f9;
+      outline: none;
+      transition: border-color .15s, box-shadow .15s;
+    }
+
+    input[type="email"]:focus,
+    input[type="password"]:focus {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59,130,246,.2);
+    }
+
+    input::placeholder { color: #475569; }
+
+    button[type="submit"] {
+      width: 100%;
+      padding: 11px;
+      margin-top: 0.25rem;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9375rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, transform .1s;
+    }
+
+    button[type="submit"]:hover:not(:disabled) { background: #2563eb; }
+    button[type="submit"]:active:not(:disabled) { transform: scale(0.98); }
+    button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .error {
+      display: none;
+      background: rgba(239,68,68,.12);
+      border: 1px solid rgba(239,68,68,.3);
+      border-radius: 7px;
+      padding: 9px 12px;
+      color: #fca5a5;
+      font-size: 0.8125rem;
+      margin-bottom: 1rem;
+    }
+
+    .card-footer {
+      margin-top: 1.5rem;
+      text-align: center;
+      font-size: 0.75rem;
+      color: #475569;
+    }
+
+    .card-footer a { color: #64748b; text-decoration: none; }
+    .card-footer a:hover { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="brand">
+      <span class="brand-name">Express Example</span>
+      <span class="badge">MCP</span>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <h1>Sign in</h1>
+        <p>Enter your credentials to continue</p>
+      </div>
+
+      <form id="login-form">
+        <div id="error-container" class="error"></div>
+
+        <div class="field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" placeholder="alice@example.com" autocomplete="email" required />
+        </div>
+
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required />
+        </div>
+
+        <button type="submit" id="login-button">Sign in</button>
+      </form>
+
+      <div class="card-footer">
+        Secured by <a href="https://zenstack.dev" target="_blank" rel="noopener">ZenStack MCP</a>
+      </div>
+    </div>
+  </div>
+  <!-- __LOGIN_SCRIPT__ -->
+</body>
+</html>

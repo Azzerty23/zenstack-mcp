@@ -1,0 +1,44 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// Generates mcp-config.ts — controls which models the MCP server exposes
+plugin mcp {
+  provider = "zenstack-mcp"
+  output   = "zenstack"
+}
+
+plugin policy {
+  provider = "@zenstackhq/plugin-policy"
+}
+
+// ── Application models ────────────────────────────────────────────────────────
+
+model User {
+  id           String  @id @default(cuid())
+  email        String  @unique
+  name         String?
+  passwordHash String  @omit @deny('read', true)
+  posts        Post[]
+
+  // Authenticated users can read any user profile; only self-update allowed.
+  @@allow('read', auth() != null)
+  @@allow('update', auth() == this)
+
+  @@auth()
+}
+
+model Post {
+  id        String  @id @default(cuid())
+  title     String
+  content   String?
+  published Boolean @default(false)
+  author    User    @relation(fields: [authorId], references: [id])
+  authorId  String
+
+  // Published posts are readable by anyone authenticated.
+  // Only the author can create, update, or delete their own posts.
+  @@allow('read', published || auth() == author)
+  @@allow('create,update,delete', auth() == author)
+}
