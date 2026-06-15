@@ -333,6 +333,131 @@ createHonoMcpHandler({
 
 ---
 
+## Serverless & Cloudflare Workers
+
+Two things matter when you deploy on a multi-instance / serverless runtime (Cloudflare Workers, Lambda, autoscaled containers): how the better-auth instance is obtained, and how its database connections behave across requests.
+
+### The auth source: captured instance vs per-request factory
+
+`createHonoMcpHandler` builds its OAuth + MCP routes once at startup — there is no per-request hook to rebuild the handler. But `betterAuthMcpAdapter` accepts the auth in **two** forms that differ in *when* the better-auth instance is materialized.
+
+**A captured instance** — created once at module load:
+
+```typescript
+const auth = betterAuth({ /* ... */, secret: process.env.BETTER_AUTH_SECRET })
+
+const { oauthRoutes, mcpMiddleware } = createHonoMcpHandler({
+  schema,
+  mcpConfig,
+  auth: betterAuthMcpAdapter(auth),          // ← reused for the isolate's lifetime
+  getClient: async (user) => createUserDb(user.id),
+})
+```
+
+**A per-request factory** — pass `getAuth` plus the static `baseURL` / `secret`. `getAuth` is invoked to build a fresh instance **only** when a better-auth API call is actually needed (`signInEmail` on login, `getSession` on refresh / stateful validate) — never on the stateless `validateToken` hot path:
+
+```typescript
+const { oauthRoutes, mcpMiddleware } = createHonoMcpHandler({
+  schema,
+  mcpConfig,
+  auth: betterAuthMcpAdapter({
+    getAuth: () => createAuth(createDb()),   // ← fresh, request-scoped db each call
+    baseURL: process.env.BETTER_AUTH_URL!,
+    secret: process.env.BETTER_AUTH_SECRET!,
+  }),
+  getClient: async (user) => createUserDb(user.id),
+})
+```
+
+The captured instance is a small performance win — `validateToken` runs on *every* tool call, and reusing the instance avoids repaying better-auth's setup cost (key imports, JWT signing, rebuilding the plugin chain). But that instance, and any DB connection it holds, lives for the whole isolate — which runs into the workerd rule below.
+
+The factory form trades that micro-optimization for a cleaner lifetime: the only DB work happens inside the request that called `getAuth`, with a request-scoped client, so nothing outlives the request. **On serverless, prefer the factory form** — it sidesteps the gotcha below entirely. (In stateless mode `validateToken` is pure crypto and calls neither `getAuth` nor the database, so the hot path stays cheap either way.)
+
+### Multi-user safety — `getClient` must be a pure factory of `user`
+
+Whichever auth form you use, **no caller identity ever flows through it.** A shared server is safe across users only because identity is strictly per-request:
+
+1. Each request presents its own token → `validateToken` returns the user **encoded in that token** (pure crypto in stateless mode — a user can only ever obtain the identity signed into their own token).
+2. That user is stored in a per-request [`AsyncLocalStorage`](https://nodejs.org/api/async_context.html) context (`requestContext.run({ user }, …)`), so concurrent requests never see each other's user.
+3. The `execute` tool reads `getRequestUser()` from *its* context and calls `getClient(user)` — which must return a **fresh, policy-scoped** client every time.
+
+The singleton holds no per-user state; the only mutable thing the requests share is the auth machinery, which is request-driven (input in, result out). That is exactly why better-auth is designed to be a singleton.
+
+The one thing that breaks this is making `getClient` return anything that isn't scoped to the `user` argument:
+
+```typescript
+// ✅ a fresh, per-user, policy-scoped client on every call
+getClient: async (user) =>
+  createDb().$use(new PolicyPlugin()).$setAuth({ id: user.id })
+
+// ❌ returns the raw singleton client — NO policies, every user sees everything
+getClient: async () => longLivedDb
+
+// ❌ caches one client across requests — leaks whichever user set it last
+let shared
+getClient: async (user) => (shared ??= createDb().$use(new PolicyPlugin()).$setAuth(user))
+```
+
+| Rule | Why |
+|------|-----|
+| Build the client from the `user` argument, every call | Scopes ZenStack policies (`auth().id` / `auth().role`) to the caller |
+| Never reuse / memoize the returned client across requests | A cached client carries the previous caller's `$setAuth` identity |
+| Never expose the singleton's raw (unscoped) auth client via `getClient` | It bypasses policies entirely |
+| Hide auth tables with `@@mcp(false)` | Keeps `Session` / `Account` / `Verification` off the AI surface |
+
+> ZenStack's `$setAuth` returns a **new** client instance rather than mutating in place, so building per request is cheap and never races with a concurrent request.
+
+### The workerd I/O gotcha (captured-instance form only)
+
+On Cloudflare Workers (workerd) there is a hard runtime rule:
+
+> An I/O object — including a database connection/socket — created in the context of one request **cannot be reused by a later request.** Doing so aborts with *"Cannot perform I/O on behalf of a different request."*
+
+If you use the **factory form** above, this doesn't apply: `getAuth` builds its db inside the request that needs it, so the connection is born and dies in one request — exactly like the per-request client your `getClient` returns. You're done.
+
+It only bites the **captured-instance** form: that instance holds one db client (the one you passed to `betterAuth({ database })`) for the whole isolate. A normal connection pool keeps sockets alive between requests, so the second request that checks out a pooled connection inherits one bound to the *first* request's I/O context — and workerd kills it. If you must keep a captured instance, give its client a pool that never carries a connection across requests:
+
+```typescript
+import { Pool } from 'pg'
+
+// Safe to hold for the whole isolate lifetime: maxUses:1 destroys each connection
+// right after it is released, so no socket is ever reused by a different request.
+const longLivedPool = new Pool({
+  connectionString,
+  maxUses: 1,
+  idleTimeoutMillis: 1,
+})
+```
+
+> **Use `maxUses: 1` *only* on a long-lived client — never on your per-request ones.** It is a deliberate de-optimization: destroying the connection on release forces a brand-new connection **per query** instead of reusing one across the queries in a request. On a long-lived client that's touched rarely (e.g. an MCP auth singleton) the cost is negligible and worth the safety. On your hot per-request clients (the one `getClient` builds, your API handlers, etc.) it is pure overhead for *zero* safety gain — those clients already can't reuse a socket across requests, because their whole pool is born and dies inside one request. Leave them on the default pool so multiple queries in a request share one connection.
+
+`maxUses: 1` is independent of which transport you pick — it just guarantees no socket outlives the request that opened it. Choose a Workers-compatible transport for that pool:
+
+- **Hyperdrive + a standard driver (`node-postgres` / `Postgres.js`)** — what [Neon officially recommends](https://neon.com/blog/hyperdrive-neon-faq) for Workers. Point the pool at `env.HYPERDRIVE.connectionString`; Hyperdrive keeps its own global pool to your database, so each new local socket still avoids the expensive Neon-side connection (you pay a cheap local handshake per query, not a full DB connect — fine for a rarely-touched long-lived client). Do **not** combine Hyperdrive with the Neon serverless driver (it speaks WebSocket/HTTP, not the TCP Hyperdrive proxies) or with Neon's `-pooler` endpoint (redundant — Hyperdrive already pools).
+- **[Neon serverless driver](https://neon.tech/docs/serverless/serverless-driver)** — the alternative when you're *not* using Hyperdrive. It tunnels over WebSocket/fetch (which workerd supports, unlike raw TCP sockets) and connects straight to Neon. Its `Pool` is still a real pool, so set the same `maxUses: 1`.
+
+```typescript
+// Recommended on Workers when you have Hyperdrive:
+import { Pool } from 'pg'
+const longLivedPool = new Pool({
+  connectionString: env.HYPERDRIVE.connectionString,
+  maxUses: 1,
+  idleTimeoutMillis: 1,
+})
+```
+
+> Either way, the rule is the same: a long-lived (singleton) DB client on workerd must not reuse a connection across requests.
+
+> In stateless mode the singleton's DB is barely touched — only `signInEmail` during the interactive login hits it (`validateToken` is crypto-only) — but that one path is enough to trigger the error, so the long-lived client still needs the connection-per-request pool.
+
+### Keep OAuth state out of memory
+
+On multiple instances, `/register` and `/oauth/authorize` can land on different instances. Set a `secret` on your better-auth config (`BETTER_AUTH_SECRET`) so `betterAuthMcpAdapter` runs in **stateless mode** — `client_id`s are HMAC-signed and PKCE codes are encrypted into the code itself, so no shared in-memory map is needed. See [`packages/zenstack-mcp/README.md`](packages/zenstack-mcp/README.md) for the stateful/stateless trade-offs.
+
+> For the same reason, stick to the default `streamable-http` transport on Workers. `sse` stores sessions in a per-instance in-memory map and breaks across instances.
+
+---
+
 ## Development
 
 ```bash

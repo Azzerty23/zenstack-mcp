@@ -18,6 +18,57 @@ import {
   verifyRefreshToken,
 } from "./stateless.js";
 
+/** The subset of a better-auth instance this adapter relies on. */
+export type BetterAuthInstance = {
+  options: {
+    baseURL: string;
+    /** Native better-auth secret. Used as the signing secret for stateless mode when no explicit `secret` option is provided. */
+    secret?: string;
+    /** Read to align the MCP token TTL with the actual better-auth session TTL */
+    session?: { expiresIn?: number };
+  };
+  api: {
+    getSession(opts: { headers: Headers }): Promise<{ user: unknown } | null>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    signInEmail(opts: {
+      body: { email: string; password: string };
+    }): Promise<any>;
+  };
+};
+
+/**
+ * Per-request form of the better-auth source.
+ *
+ * Instead of capturing a single long-lived instance, `getAuth` is invoked to obtain a
+ * fresh instance **only when a better-auth API call is actually needed** — i.e. on
+ * login (`signInEmail`) and on refresh / stateful validation (`getSession`). It is
+ * never called on the stateless `validateToken` hot path (pure crypto).
+ *
+ * This lets serverless callers (Cloudflare Workers, Lambda) build the instance with a
+ * **request-scoped** database client, so no DB connection outlives the request that
+ * opened it — avoiding the long-lived-singleton + `maxUses: 1` workaround that a single
+ * captured instance forces on workerd.
+ *
+ * The static OAuth config (`baseURL`, `secret`, session TTL) does not depend on the
+ * request, so it is provided here directly rather than read from a resolved instance.
+ */
+export type BetterAuthFactory = {
+  /** Returns a better-auth instance per call. Back it with a request-scoped db. */
+  getAuth: () => BetterAuthInstance | Promise<BetterAuthInstance>;
+  /** OAuth issuer / endpoint base — equivalent to `auth.options.baseURL`. */
+  baseURL: string;
+  /** Stateless signing secret — equivalent to `auth.options.secret`. */
+  secret?: string;
+  /** better-auth session TTL in seconds, to align the MCP token TTL (default 3600). */
+  sessionExpiresIn?: number;
+};
+
+function isFactory(
+  source: BetterAuthInstance | BetterAuthFactory,
+): source is BetterAuthFactory {
+  return typeof (source as BetterAuthFactory).getAuth === "function";
+}
+
 /**
  * Creates an MCP auth adapter for a better-auth instance.
  *
@@ -34,6 +85,10 @@ import {
  * request, so revocations take effect immediately. Only suitable for single-instance
  * deployments.
  *
+ * The first argument is either a captured better-auth instance, or a {@link BetterAuthFactory}
+ * (`{ getAuth, baseURL, secret }`) that yields a fresh, request-scoped instance per API call —
+ * preferred on serverless runtimes so the auth instance never holds a long-lived db connection.
+ *
  * ```ts
  * import { betterAuthMcpAdapter } from 'zenstack-mcp/auth-adapters/better-auth'
  * import { auth } from '~/lib/auth'
@@ -43,26 +98,17 @@ import {
  *   auth: betterAuthMcpAdapter(auth),
  *   // or, to force stateful mode:
  *   auth: betterAuthMcpAdapter(auth, { stateful: true }),
+ *   // or, per-request (serverless — request-scoped db, no long-lived connection):
+ *   auth: betterAuthMcpAdapter({
+ *     getAuth: () => createAuth(createDb()),
+ *     baseURL: process.env.BETTER_AUTH_URL!,
+ *     secret: process.env.BETTER_AUTH_SECRET!,
+ *   }),
  * })
  * ```
  */
 export function betterAuthMcpAdapter(
-  auth: {
-    options: {
-      baseURL: string;
-      /** Native better-auth secret. Used as the signing secret for stateless mode when no explicit `secret` option is provided. */
-      secret?: string;
-      /** Read to align the MCP token TTL with the actual better-auth session TTL */
-      session?: { expiresIn?: number };
-    };
-    api: {
-      getSession(opts: { headers: Headers }): Promise<{ user: unknown } | null>;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      signInEmail(opts: {
-        body: { email: string; password: string };
-      }): Promise<any>;
-    };
-  },
+  auth: BetterAuthInstance | BetterAuthFactory,
   options?: {
     /** Override the default login page. Accepts an HTML string or an async function returning one. */
     loginPage?: string | (() => string | Promise<string>);
@@ -110,11 +156,29 @@ export function betterAuthMcpAdapter(
     };
   },
 ): McpAuthAdapter {
-  const base = auth.options.baseURL;
-  const expiresIn = auth.options.session?.expiresIn ?? 3600;
+  // Normalize the instance / factory forms: static OAuth config is read up front
+  // (it never depends on the request), while getAuthInstance() is deferred to the
+  // few code paths that actually call the better-auth API.
+  const resolved = isFactory(auth)
+    ? {
+        base: auth.baseURL,
+        ownSecret: auth.secret,
+        expiresIn: auth.sessionExpiresIn ?? 3600,
+        getAuthInstance: () => Promise.resolve(auth.getAuth()),
+      }
+    : {
+        base: auth.options.baseURL,
+        ownSecret: auth.options.secret,
+        expiresIn: auth.options.session?.expiresIn ?? 3600,
+        getAuthInstance: () => Promise.resolve(auth),
+      };
+
+  const base = resolved.base;
+  const expiresIn = resolved.expiresIn;
+  const getAuthInstance = resolved.getAuthInstance;
   const secret = options?.stateful
     ? undefined
-    : (options?.secret ?? auth.options.secret);
+    : (options?.secret ?? resolved.ownSecret);
   if (secret && secret.length < 32) {
     throw new Error(
       "zenstack-mcp: better-auth stateless secret must be at least 32 characters",
@@ -368,7 +432,7 @@ export function betterAuthMcpAdapter(
         let sessionToken: string | undefined;
         let userPayload: unknown;
         try {
-          const result = await auth.api.signInEmail({
+          const result = await (await getAuthInstance()).api.signInEmail({
             body: { email, password },
           });
           sessionToken = result?.token;
@@ -427,7 +491,7 @@ export function betterAuthMcpAdapter(
             await options.refreshTokenReuse.consume(rtPayload.jti, rtPayload.exp);
           }
           // One DB call — validates the session is still alive and gets fresh user data.
-          const session = await auth.api.getSession({
+          const session = await (await getAuthInstance()).api.getSession({
             headers: new Headers({
               authorization: `Bearer ${rtPayload.sessionToken}`,
             }),
@@ -516,7 +580,7 @@ export function betterAuthMcpAdapter(
         return payload.user;
       }
       // Stateful: session lookup via better-auth catches immediate revocations.
-      const session = await auth.api.getSession({
+      const session = await (await getAuthInstance()).api.getSession({
         headers: new Headers({ authorization: `Bearer ${token}` }),
       });
       if (!session) throw new Error("Invalid or expired token");
