@@ -8,7 +8,7 @@ Expose your [ZenStack v3](https://zenstack.dev) database to LLM like Claude — 
 const { oauthRoutes, mcpMiddleware } = createHonoMcpHandler({
   schema,
   auth: { validateCredentials, jwtSecret: process.env.JWT_SECRET! },
-  getClient: async (user) => db.withPolicy(new PolicyPlugin({ user })),
+  getClient: async (user) => db.$use(new PolicyPlugin()).$setAuth({ id: user.id }),
 })
 
 app.route('/', oauthRoutes)   // OAuth 2.0 + PKCE flows
@@ -47,7 +47,7 @@ Claude (MCP client)
 │  • execute tool             │  ← runs Prisma queries through policies
 │  • me tool                  │  ← returns the authenticated user
 └────────────┬────────────────┘
-             │  db.withPolicy(new PolicyPlugin({ user }))
+             │  db.$use(new PolicyPlugin()).$setAuth({ id: user.id })
              ▼
 ┌─────────────────────────────┐
 │  ZenStack enhanced client   │  ← access-control policies enforced here
@@ -126,7 +126,7 @@ const { oauthRoutes, mcpMiddleware } = createHonoMcpHandler({
     },
     jwtSecret: process.env.JWT_SECRET!,
   },
-  getClient: async (user) => db.withPolicy(new PolicyPlugin({ user })),
+  getClient: async (user) => db.$use(new PolicyPlugin()).$setAuth({ id: user.id }),
 })
 
 app.route('/', oauthRoutes)
