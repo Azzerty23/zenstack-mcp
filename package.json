@@ -1,12 +1,15 @@
 {
   "name": "zenstack-mcp-monorepo",
   "private": true,
+  "version": "0.1.0",
   "type": "module",
   "workspaces": [
     "packages/*",
     "examples/*"
   ],
   "scripts": {
-    "build": "bun run --filter './packages/*' build"
+    "build": "bun run --filter './packages/*' build",
+    "npm:publish": "bun run version:bump && bun run build && cd packages/zenstack-mcp && bun publish",
+    "version:bump": "bun ./scripts/bump-version.ts"
   }
 }
