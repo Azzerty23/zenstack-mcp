@@ -36,7 +36,7 @@ const { oauthRoutes, mcpMiddleware } = createHonoMcpHandler({
     },
     jwtSecret: process.env.JWT_SECRET!,
   },
-  getClient: async (user) => db.withPolicy(new PolicyPlugin({ user })),
+  getClient: async (user) => db.$use(new PolicyPlugin()).$setAuth({ id: user.id }),
 })
 
 app.route('/', oauthRoutes)    // /.well-known/*, /oauth/*, /login, /register
@@ -60,7 +60,7 @@ const { oauthRoutes, mcpMiddleware } = createExpressMcpHandler({
     validateCredentials: async (email, password) => { /* ... */ },
     jwtSecret: process.env.JWT_SECRET!,
   },
-  getClient: async (user) => db.withPolicy(new PolicyPlugin({ user })),
+  getClient: async (user) => db.$use(new PolicyPlugin()).$setAuth({ id: user.id }),
 })
 
 app.use(oauthRoutes)           // /.well-known/*, /oauth/*, /login, /register
@@ -75,7 +75,7 @@ import { betterAuthMcpAdapter } from 'zenstack-mcp/auth-adapters/better-auth'
 app.route('/mcp', createHonoMcpHandler({
   schema,
   auth: betterAuthMcpAdapter(myBetterAuthInstance),
-  getClient: async (user) => db.withPolicy(new PolicyPlugin({ user })),
+  getClient: async (user) => db.$use(new PolicyPlugin()).$setAuth({ id: user.id }),
 }))
 ```
 
@@ -167,7 +167,7 @@ authenticated user gets unrestricted read/write access to your entire database t
 
 ```typescript
 // ✅ Correct — policies are enforced
-getClient: async (user) => db.withPolicy(new PolicyPlugin({ user }))
+getClient: async (user) => db.$use(new PolicyPlugin()).$setAuth({ id: user.id })
 
 // ❌ Wrong — NO access control: every authenticated caller can read/write everything
 getClient: async (user) => db
