@@ -45,6 +45,7 @@ Claude (MCP client)
 │                             │
 │  • schema tool              │  ← returns your ZenStack data model
 │  • execute tool             │  ← runs Prisma queries through policies
+│  • procedure tool           │  ← invokes custom $procs through policies
 │  • me tool                  │  ← returns the authenticated user
 └────────────┬────────────────┘
              │  db.$use(new PolicyPlugin()).$setAuth({ id: user.id })

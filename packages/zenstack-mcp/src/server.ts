@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createSchemaFactory } from "@zenstackhq/zod";
-import type { McpModelDef, McpServerConfig } from "./types.js";
+import type { McpModelDef, McpProcedureDef, McpServerConfig } from "./types.js";
 import { ALL_OPERATIONS } from "./types.js";
 import { registerSchemaTool } from "./tools/schema-tool.js";
 import { registerExecuteTool } from "./tools/execute-tool.js";
+import { registerProcedureTool } from "./tools/procedure-tool.js";
 import { registerMeTool } from "./tools/me-tool.js";
 import type { SchemaDef } from "@zenstackhq/schema";
 
@@ -32,6 +33,18 @@ type RawSchemaDef = {
         name: string;
         args?: ReadonlyArray<RawAttributeArg>;
       }>;
+    }
+  >;
+  procedures?: Record<
+    string,
+    {
+      params?: Record<
+        string,
+        { type: string; array?: boolean; optional?: boolean }
+      >;
+      returnType: string;
+      returnArray?: boolean;
+      mutation?: boolean;
     }
   >;
 };
@@ -123,6 +136,36 @@ export function extractModels<Schema extends SchemaDef>(
   });
 }
 
+/**
+ * Reads custom procedures from the generated schema and applies the same
+ * exposure filtering as models. When `mcpConfig.procedures` is absent, every
+ * declared procedure is exposed; when present, only entries with
+ * `exposed: true` are kept (denylist-by-default, mirroring models).
+ */
+export function extractProcedures<Schema extends SchemaDef>(
+  config: McpServerConfig<Schema>,
+): McpProcedureDef[] {
+  const raw = config.schema as unknown as RawSchemaDef;
+  if (!raw.procedures) return [];
+
+  const all = Object.entries(raw.procedures).map(([name, def]) => ({
+    name,
+    params: Object.entries(def.params ?? {}).map(([paramName, p]) => ({
+      name: paramName,
+      type: p.type,
+      isList: p.array ?? false,
+      isRequired: !(p.optional ?? false),
+    })),
+    returnType: def.returnType,
+    returnArray: def.returnArray ?? false,
+    mutation: def.mutation ?? false,
+  } satisfies McpProcedureDef));
+
+  const procCfg = config.mcpConfig?.procedures;
+  if (!procCfg) return all;
+  return all.filter((p) => procCfg[p.name]?.exposed === true);
+}
+
 export function buildMcpServer<Schema extends SchemaDef>(
   models: McpModelDef[],
   config: McpServerConfig<Schema>,
@@ -142,6 +185,11 @@ export function buildMcpServer<Schema extends SchemaDef>(
     factory as Parameters<typeof registerExecuteTool>[3],
     config.requireWhereForBulk,
   );
+
+  const procedures = extractProcedures(config);
+  if (procedures.length > 0) {
+    registerProcedureTool(server, procedures, config.getClient);
+  }
 
   return server;
 }
