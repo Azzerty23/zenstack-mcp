@@ -1,5 +1,6 @@
 import { describe, test, expect } from "bun:test";
 import { validateOperation } from "../tools/validate.js";
+import { ALL_OPERATIONS } from "../types.js";
 import type { McpModelDef } from "../types.js";
 
 const USER_MODEL: McpModelDef = {
@@ -353,5 +354,117 @@ describe("validateOperation — cursor validation", () => {
   test("findMany without cursor is valid", () => {
     const result = validateOperation(MODELS, "User", "findMany", {}, noopFactory);
     expect(result.valid).toBe(true);
+  });
+});
+
+describe("validateOperation — extended CRUD operations", () => {
+  // Model exposing every operation in the ORM (createManyAndReturn, aggregate, groupBy, …).
+  const FULL_MODEL: McpModelDef = { ...USER_MODEL, operations: [...ALL_OPERATIONS] };
+  const FULL = [FULL_MODEL];
+
+  test("findUniqueOrThrow requires where", () => {
+    const result = validateOperation(FULL, "User", "findUniqueOrThrow", {}, noopFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("where"))).toBe(true);
+  });
+
+  test("findUniqueOrThrow rejects non-unique where field", () => {
+    const result = validateOperation(FULL, "User", "findUniqueOrThrow", { where: { name: "Alice" } }, noopFactory);
+    expect(result.valid).toBe(false);
+  });
+
+  test("findUniqueOrThrow accepts @unique where", () => {
+    const result = validateOperation(FULL, "User", "findUniqueOrThrow", { where: { email: "a@b.com" } }, noopFactory);
+    expect(result.valid).toBe(true);
+  });
+
+  test("findFirstOrThrow passes without args", () => {
+    const result = validateOperation(FULL, "User", "findFirstOrThrow", {}, noopFactory);
+    expect(result.valid).toBe(true);
+  });
+
+  test("findFirstOrThrow validates orderBy direction", () => {
+    const result = validateOperation(FULL, "User", "findFirstOrThrow", { orderBy: { name: "sideways" } }, noopFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("orderBy"))).toBe(true);
+  });
+
+  test("findFirstOrThrow validates cursor uniqueness", () => {
+    const result = validateOperation(FULL, "User", "findFirstOrThrow", { cursor: { name: "Alice" } }, noopFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("cursor"))).toBe(true);
+  });
+
+  test("createManyAndReturn requires a data array", () => {
+    const result = validateOperation(FULL, "User", "createManyAndReturn", { data: { email: "a@b.com" } }, noopFactory);
+    expect(result.valid).toBe(false);
+  });
+
+  test("createManyAndReturn validates each item via zodFactory", () => {
+    const zodFactory = {
+      makeModelSchema: () => ({
+        safeParse: (v: unknown) =>
+          (v as Record<string, unknown>).email
+            ? { success: true as const }
+            : { success: false as const, error: { issues: [{ message: "email is required", path: ["email"] }] } },
+      }),
+    };
+    const result = validateOperation(FULL, "User", "createManyAndReturn", { data: [{ email: "a@b.com" }, {}] }, zodFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("data[1]"))).toBe(true);
+  });
+
+  test("updateManyAndReturn requires data", () => {
+    const result = validateOperation(FULL, "User", "updateManyAndReturn", {}, noopFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("data"))).toBe(true);
+  });
+
+  test("updateManyAndReturn passes with where and data", () => {
+    const result = validateOperation(FULL, "User", "updateManyAndReturn", { where: { name: "Alice" }, data: { name: "Bob" } }, noopFactory);
+    expect(result.valid).toBe(true);
+  });
+
+  test("updateManyAndReturn is subject to requireWhereForBulk", () => {
+    const result = validateOperation(FULL, "User", "updateManyAndReturn", { data: { name: "X" } }, noopFactory, true);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors[0]).toContain("requireWhereForBulk");
+  });
+
+  test("exists passes without args", () => {
+    const result = validateOperation(FULL, "User", "exists", {}, noopFactory);
+    expect(result.valid).toBe(true);
+  });
+
+  test("exists validates where field types", () => {
+    const result = validateOperation(FULL, "User", "exists", { where: { id: 123 } }, noopFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("where"))).toBe(true);
+  });
+
+  test("aggregate passes with _count and where", () => {
+    const result = validateOperation(FULL, "User", "aggregate", { where: { name: "Alice" }, _count: true }, noopFactory);
+    expect(result.valid).toBe(true);
+  });
+
+  test("aggregate validates orderBy direction", () => {
+    const result = validateOperation(FULL, "User", "aggregate", { orderBy: { name: "sideways" } }, noopFactory);
+    expect(result.valid).toBe(false);
+  });
+
+  test("groupBy requires by", () => {
+    const result = validateOperation(FULL, "User", "groupBy", { _count: { _all: true } }, noopFactory);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.errors.some((e) => e.includes("by"))).toBe(true);
+  });
+
+  test("groupBy passes with by and aggregations", () => {
+    const result = validateOperation(FULL, "User", "groupBy", { by: ["name"], _count: { _all: true } }, noopFactory);
+    expect(result.valid).toBe(true);
+  });
+
+  test("groupBy validates where field types", () => {
+    const result = validateOperation(FULL, "User", "groupBy", { by: ["name"], where: { id: 123 } }, noopFactory);
+    expect(result.valid).toBe(false);
   });
 });

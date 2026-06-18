@@ -176,7 +176,9 @@ export function buildMcpServer<Schema extends SchemaDef>(
     version: config.version ?? "0.1.0",
   });
 
-  registerSchemaTool(server, models);
+  const procedures = extractProcedures(config);
+
+  registerSchemaTool(server, models, procedures);
   registerMeTool(server);
   registerExecuteTool(
     server,
@@ -186,7 +188,6 @@ export function buildMcpServer<Schema extends SchemaDef>(
     config.requireWhereForBulk,
   );
 
-  const procedures = extractProcedures(config);
   if (procedures.length > 0) {
     registerProcedureTool(server, procedures, config.getClient);
   }

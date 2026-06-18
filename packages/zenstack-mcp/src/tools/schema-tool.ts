@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { McpModelDef } from '../types.js'
+import type { McpModelDef, McpProcedureDef } from '../types.js'
+import { renderSchema } from './schema-renderer.js'
 
 const OPERATION_DOCS: Record<string, { description: string; example: unknown }> = {
   findMany: {
@@ -47,16 +48,58 @@ const OPERATION_DOCS: Record<string, { description: string; example: unknown }> 
     description: 'Count records matching the criteria.',
     example: { where: { published: true } },
   },
+  findUniqueOrThrow: {
+    description: 'Like findUnique, but throws an error instead of returning null when no record is found.',
+    example: { where: { id: 'clxyz123' } },
+  },
+  findFirstOrThrow: {
+    description: 'Like findFirst, but throws an error instead of returning null when no record is found.',
+    example: { where: { email: { contains: '@example.com' } } },
+  },
+  createManyAndReturn: {
+    description: 'Like createMany, but returns the created records instead of just a count.',
+    example: { data: [{ title: 'Post 1' }, { title: 'Post 2' }] },
+  },
+  updateManyAndReturn: {
+    description: 'Like updateMany, but returns the updated records instead of just a count.',
+    example: { where: { published: false }, data: { published: true } },
+  },
+  exists: {
+    description: 'Returns true if at least one record matches the criteria, false otherwise.',
+    example: { where: { email: 'alice@example.com' } },
+  },
+  aggregate: {
+    description: 'Compute aggregations (_count, _avg, _sum, _min, _max) over records matching the criteria.',
+    example: { where: { published: true }, _count: true, _avg: { views: true } },
+  },
+  groupBy: {
+    description: 'Group records by one or more fields and aggregate within each group. Requires "by"; filter groups with "having".',
+    example: { by: ['authorId'], _count: { _all: true }, having: { authorId: { _count: { gt: 1 } } } },
+  },
 }
 
-export function registerSchemaTool(server: McpServer, models: McpModelDef[]): void {
+/** Compact one-line-per-operation reference appended to the schema document. */
+function renderOperationDocs(): string {
+  const lines = Object.entries(OPERATION_DOCS).map(
+    ([op, d]) => `  ${op}: ${d.description} e.g. ${JSON.stringify(d.example)}`,
+  )
+  return `// Operation arguments (for the \`execute\` tool):\n${lines.join('\n')}`
+}
+
+export function registerSchemaTool(
+  server: McpServer,
+  models: McpModelDef[],
+  procedures: McpProcedureDef[] = [],
+): void {
   server.registerTool('schema', {
     description:
-      'Returns exposed models with their fields and available operations, plus operation documentation with examples. ' +
-      'Call this first to understand what data you can query and how to structure arguments. ' +
+      'Returns the exposed schema as concise ZModel/Prisma-style text: model blocks with their fields ' +
+      '(queried via the `execute` tool) and any custom procedures (invoked via the `procedure` tool), ' +
+      'followed by a reference of operation arguments with examples. ' +
+      'Call this first to understand what data you can query, what procedures you can invoke, and how to structure arguments. ' +
       'Pass a model name to retrieve schema for a single model only.',
     inputSchema: {
-      model: z.string().optional().describe('Filter to a single model by name (PascalCase). Omit to return all models.'),
+      model: z.string().optional().describe('Filter to a single model by name (PascalCase). Omit to return all models. Does not affect the returned procedures.'),
     },
   }, async ({ model }) => {
     const filtered = model
@@ -75,8 +118,9 @@ export function registerSchemaTool(server: McpServer, models: McpModelDef[]): vo
       }
     }
 
+    const text = `${renderSchema(filtered, procedures)}\n\n${renderOperationDocs()}`
     return {
-      content: [{ type: 'text', text: JSON.stringify({ models: filtered, operations: OPERATION_DOCS }, null, 2) }],
+      content: [{ type: 'text', text }],
     }
   })
 }

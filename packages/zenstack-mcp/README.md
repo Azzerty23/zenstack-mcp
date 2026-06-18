@@ -143,10 +143,17 @@ The server exposes these tools to connected AI clients:
 
 | Tool | Description |
 |------|-------------|
-| `schema` | Returns the ZenStack schema so the AI understands your data model |
+| `schema` | Returns the exposed schema as concise ZModel/Prisma-style text — model blocks with their fields and any custom procedures — so the AI understands your data model with minimal token overhead |
 | `execute` | Runs a Prisma-compatible query through your policy-enforced client — access-control policies are validated automatically before execution |
 | `procedure` | Invokes a custom ZenStack procedure (`$procs`) through your policy-enforced client. Only registered when the schema declares procedures |
 | `me` | Returns the authenticated user for the current request |
+
+The `execute` tool supports ZenStack's full CRUD operation set, sourced directly
+from the ORM so it never drifts: `findMany`, `findUnique`, `findFirst`,
+`findUniqueOrThrow`, `findFirstOrThrow`, `create`, `createMany`,
+`createManyAndReturn`, `update`, `updateMany`, `updateManyAndReturn`, `upsert`,
+`delete`, `deleteMany`, `count`, `exists`, `aggregate` and `groupBy`. Restrict
+the set per model via `mcpConfig` or `modelOperations` (see below).
 
 ## API Reference
 
