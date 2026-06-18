@@ -2,7 +2,7 @@
 
 Turnkey [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server for [ZenStack v3](https://zenstack.dev), with built-in OAuth 2.0 authentication.
 
-Exposes your ZenStack schema as MCP tools (`schema`, `execute`) so AI assistants like Claude can query and mutate your database through your access-control policies.
+Exposes your ZenStack schema as MCP tools (`schema`, `execute`, `procedure`) so AI assistants like Claude can query and mutate your database — and invoke your custom procedures — through your access-control policies.
 
 ## Installation
 
@@ -104,6 +104,31 @@ model AuditLog {
 }
 ```
 
+### Custom procedures
+
+Custom procedures (`procedure` / `mutation procedure`) are exposed through the
+`procedure` tool and run on the enhanced client's `$procs` surface, so your
+access policies and plugins still apply:
+
+```zmodel
+procedure getCartTotal(cartId: String): Int
+mutation procedure checkout(cartId: String, coupon: String?): Order
+```
+
+Every declared procedure is exposed by default. To hide one, set its
+`exposed` flag to `false` in the generated `procedures` map of
+`./zenstack/mcp-config.ts`:
+
+```typescript
+export const mcpConfig: McpConfig = {
+  models: { /* ... */ },
+  procedures: {
+    getCartTotal: { exposed: true },
+    checkout: { exposed: false }, // hidden from the `procedure` tool
+  },
+}
+```
+
 Run `zen generate` to produce `./zenstack/mcp-config.ts`, then pass it to the handler:
 
 ```typescript
@@ -114,12 +139,13 @@ app.route('/mcp', createHonoMcpHandler({ schema, mcpConfig, auth: ..., getClient
 
 ## MCP Tools
 
-The server exposes three tools to connected AI clients:
+The server exposes these tools to connected AI clients:
 
 | Tool | Description |
 |------|-------------|
 | `schema` | Returns the ZenStack schema so the AI understands your data model |
 | `execute` | Runs a Prisma-compatible query through your policy-enforced client — access-control policies are validated automatically before execution |
+| `procedure` | Invokes a custom ZenStack procedure (`$procs`) through your policy-enforced client. Only registered when the schema declares procedures |
 | `me` | Returns the authenticated user for the current request |
 
 ## API Reference
@@ -160,10 +186,11 @@ Read this before deploying — two points are easy to get wrong and both bypass 
 
 ### `getClient` **must** return a policy-enforced (enhanced) client
 
-The `execute` tool runs the operation it is given directly on whatever `getClient` returns.
-**All data-access authorization lives in your ZenStack access policies, enforced by the
-enhanced client — not in this package.** If `getClient` returns a *raw* ORM client, every
-authenticated user gets unrestricted read/write access to your entire database through `execute`.
+The `execute` and `procedure` tools run the operation they are given directly on whatever
+`getClient` returns. **All data-access authorization lives in your ZenStack access policies,
+enforced by the enhanced client — not in this package.** If `getClient` returns a *raw* ORM
+client, every authenticated user gets unrestricted read/write access to your entire database
+through `execute`, and your procedures run with their policies bypassed.
 
 ```typescript
 // ✅ Correct — policies are enforced
@@ -179,11 +206,15 @@ anonymous case (`@@allow('read', true)` etc.).
 
 ### Model exposure is *not* an authorization boundary
 
-`@@mcp(false)`, `mcpConfig`, `include`, `exclude` and `modelOperations` only reduce the surface
-the MCP tools *advertise*. They do **not** restrict what the database can return:
+`@@mcp(false)`, `mcpConfig`, `include`, `exclude`, `modelOperations` and the `procedures`
+exposure map only reduce the surface the MCP tools *advertise*. They do **not** restrict what
+the database can return:
 
 - A model hidden from MCP is still reachable through a relation `include`/`select` from an
   exposed model (subject to your policies).
+- A hidden procedure is unreachable through the `procedure` tool, but the underlying `$procs`
+  method still exists on the client — exposure config is not a substitute for policy checks
+  inside the procedure itself.
 - These options are a usability/ergonomics filter, not a security control.
 
 **Always enforce real protection with ZenStack access policies.** Treat exposure config as
