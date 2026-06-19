@@ -192,5 +192,9 @@ export function buildMcpServer<Schema extends SchemaDef>(
     registerProcedureTool(server, procedures, config.getClient);
   }
 
+  // Host-defined tools (e.g. oRPC-backed), registered last so they can't be
+  // shadowed by and don't interfere with the built-in tools above.
+  config.registerTools?.(server);
+
   return server;
 }

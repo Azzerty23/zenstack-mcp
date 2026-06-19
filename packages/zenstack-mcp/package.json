@@ -1,6 +1,6 @@
 {
   "name": "zenstack-mcp",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "Turnkey MCP (Model Context Protocol) server for ZenStack v3 with OAuth 2.0 authentication",
   "license": "MIT",
   "author": "azzerty23",

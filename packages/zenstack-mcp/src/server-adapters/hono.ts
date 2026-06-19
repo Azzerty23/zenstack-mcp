@@ -19,6 +19,13 @@ import type { AuthType } from "@zenstackhq/orm";
 import { requestContext } from "../context.js";
 import { isOriginAllowed } from "./origin.js";
 
+// Re-exported from the runtime adapter so Workers consumers can read the
+// authenticated user without importing the bare `zenstack-mcp` entry, whose
+// `default` export is the ZenStack CLI plugin (it transitively loads
+// @zenstackhq/sdk → @zenstackhq/language, which calls createRequire() at module
+// init and crashes in the Cloudflare Workers runtime).
+export { getRequestUser } from "../context.js";
+
 function resolveAuthAdapter(
   auth: McpAuthAdapter | McpBuiltInAuthOptions,
 ): McpAuthAdapter {
