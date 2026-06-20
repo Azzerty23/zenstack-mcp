@@ -1,8 +1,17 @@
 import type { CliGeneratorContext } from '@zenstackhq/sdk'
 import { ModelUtils } from '@zenstackhq/sdk'
-import { isDataModel, isProcedure } from '@zenstackhq/language/ast'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+
+// Match AST nodes by their `$type` discriminant instead of importing the
+// `isDataModel`/`isProcedure` guards from `@zenstackhq/language/ast`. Those
+// guards pull in the language package's langium-based reflection, which the
+// bundler inlines — and that inlined copy breaks when the host ZenStack ships
+// a different major of langium (e.g. 3.x → 4.x rewrote AbstractAstReflection).
+// `DataModel` and `Procedure` are concrete leaf node types, so a `$type`
+// equality check is exactly equivalent to the reflection-based guards.
+const isDataModel = (d: { $type: string }) => d.$type === 'DataModel'
+const isProcedure = (d: { $type: string }) => d.$type === 'Procedure'
 
 export async function generate(context: CliGeneratorContext): Promise<void> {
   const { model, defaultOutputPath, pluginOptions } = context

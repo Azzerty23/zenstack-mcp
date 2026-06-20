@@ -13,7 +13,19 @@ export default defineConfig({
   dts: true,
   clean: true,
   deps: {
-    neverBundle: ['@zenstackhq/sdk', '@zenstackhq/language', 'langium', 'express', 'hono', 'zod', 'better-auth'],
+    // Use regexes so subpath imports (e.g. `@zenstackhq/language/ast`) are also
+    // treated as external. A bare `@zenstackhq/language` string does NOT match
+    // the `/ast` subpath — that gap let the langium reflection get inlined and
+    // crash against the host's newer langium major (3.x → 4.x).
+    neverBundle: [
+      /^@zenstackhq\/sdk(\/|$)/,
+      /^@zenstackhq\/language(\/|$)/,
+      /^langium(\/|$)/,
+      'express',
+      'hono',
+      'zod',
+      'better-auth',
+    ],
     onlyBundle: false,
   },
   exports: {

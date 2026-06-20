@@ -12,9 +12,9 @@
   "dependencies": {
     "zenstack-mcp": "workspace:*",
     "express": "^5.x",
-    "@zenstackhq/orm": "^3.7.0",
-    "@zenstackhq/plugin-policy": "^3.7.0",
-    "@zenstackhq/schema": "^3.7.0",
+    "@zenstackhq/orm": "^3.8.0",
+    "@zenstackhq/plugin-policy": "^3.8.0",
+    "@zenstackhq/schema": "^3.8.0",
     "bcryptjs": "^2.x",
     "kysely-bun-worker": "^1.x"
   },
@@ -23,7 +23,7 @@
     "@types/node": "latest",
     "@types/express": "^5.x",
     "@types/bcryptjs": "^2.x",
-    "@zenstackhq/sdk": "^3.7.0",
-    "@zenstackhq/cli": "^3.7.0"
+    "@zenstackhq/sdk": "^3.8.0",
+    "@zenstackhq/cli": "^3.8.0"
   }
 }

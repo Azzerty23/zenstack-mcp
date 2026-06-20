@@ -1,6 +1,6 @@
 {
   "name": "zenstack-mcp",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Turnkey MCP (Model Context Protocol) server for ZenStack v3 with OAuth 2.0 authentication",
   "license": "MIT",
   "author": "azzerty23",
@@ -60,25 +60,25 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@zenstackhq/zod": "^3.7.0",
+    "@zenstackhq/zod": "^3.8.0",
     "jose": "^6.2.3"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/express": "^5.0.6",
-    "@zenstackhq/language": "^3.7.0",
-    "langium": "^3.5.0",
-    "@zenstackhq/plugin-policy": "^3.7.0",
-    "@zenstackhq/schema": "^3.7.0",
-    "@zenstackhq/sdk": "^3.7.0",
+    "@zenstackhq/language": "^3.8.0",
+    "langium": "^4.3.0",
+    "@zenstackhq/plugin-policy": "^3.8.0",
+    "@zenstackhq/schema": "^3.8.0",
+    "@zenstackhq/sdk": "^3.8.0",
     "hono": "^4.12.18",
     "tsdown": "^0.22.0"
   },
   "peerDependencies": {
-    "@zenstackhq/orm": "^3.7.0",
-    "@zenstackhq/plugin-policy": "^3.7.0",
-    "@zenstackhq/schema": "^3.7.0",
-    "@zenstackhq/sdk": "^3.7.0",
+    "@zenstackhq/orm": "^3.8.0",
+    "@zenstackhq/plugin-policy": "^3.8.0",
+    "@zenstackhq/schema": "^3.8.0",
+    "@zenstackhq/sdk": "^3.8.0",
     "better-auth": "*",
     "express": "^5.x",
     "hono": "^4.x",
@@ -103,9 +103,6 @@
     "@zenstackhq/orm": {
       "optional": true
     }
-  },
-  "inlinedDependencies": {
-    "@zenstackhq/language": "3.7.0"
   },
   "publishConfig": {
     "exports": {
