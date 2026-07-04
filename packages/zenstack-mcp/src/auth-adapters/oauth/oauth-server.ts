@@ -1,8 +1,17 @@
-import type { RouterAdapter, McpBuiltInAuthOptions, GenericRequest, GenericResponse } from '../../types.js'
+import type { RouterAdapter, McpBuiltInAuthOptions, GenericRequest } from '../../types.js'
 import { createInMemoryTokenStore, pkceVerify, randomCode, randomToken } from './store.js'
 import { signToken } from './jwt.js'
-import { normalizeRedirectUris } from './redirect-uri.js'
-import { injectLoginScript, loginPage as defaultLoginPage } from '../login-page.js'
+import {
+  checkResource,
+  createAuthorizeHandler,
+  createLoginHandler,
+  createRegisterHandler,
+  mountDiscoveryRoutes,
+  oauthError,
+} from '../shared.js'
+import { loginPage as defaultLoginPage } from '../login-page.js'
+
+const GRANT_TYPES = ['authorization_code', 'refresh_token'] as const
 
 export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthOptions): void {
   const ttl = options.tokenTtl ?? 3600
@@ -10,6 +19,11 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
   const maxClients = options.maxClients ?? 100
   const clientTtl = (options.clientTtl ?? 24 * 3600) * 1000
   const store = options.tokenStore ?? createInMemoryTokenStore()
+  // RFC 8707: the canonical resource this server protects. Access tokens are
+  // minted with this value as `aud` and validated against it on every MCP
+  // request (see builtInMcpAuth.validateToken).
+  const expectedResource = (req: GenericRequest) => options.resource ?? req.origin
+
   // Persists redirect_uris declared at registration time so that /login and /oauth/authorize
   // can validate the redirect_uri against this allowlist — prevents open redirect attacks where
   // a crafted redirect_uri would redirect the authorization code to an attacker-controlled URI.
@@ -35,143 +49,81 @@ export function mountOAuthRoutes(router: RouterAdapter, options: McpBuiltInAuthO
     return entry.redirectUris
   }
 
-  router.get('/.well-known/oauth-authorization-server', (req) => ({
-    type: 'json',
-    data: {
-      issuer: req.origin,
-      authorization_endpoint: `${req.origin}/oauth/authorize`,
-      token_endpoint: `${req.origin}/oauth/token`,
-      revocation_endpoint: `${req.origin}/oauth/revoke`,
-      registration_endpoint: `${req.origin}/register`,
-      response_types_supported: ['code'],
-      code_challenge_methods_supported: ['S256'],
-      grant_types_supported: ['authorization_code', 'refresh_token'],
-    },
-  }))
-
-  const protectedResourceMetadata = (req: GenericRequest): GenericResponse => ({
-    type: 'json',
-    data: {
-      resource: req.origin,
-      authorization_servers: [req.origin],
-      bearer_methods_supported: ['header'],
-    },
+  mountDiscoveryRoutes(router, {
+    issuer: (req) => req.origin,
+    resource: expectedResource,
+    grantTypes: GRANT_TYPES,
+    revocation: true,
   })
 
-  router.get('/.well-known/oauth-protected-resource', protectedResourceMetadata)
-
-  // RFC 9728 §3.1: clients probe the path-specific metadata
-  // (/.well-known/oauth-protected-resource/<resource>) before falling back to the
-  // root. Register the single-segment variant so common mounts (e.g. /mcp) don't
-  // 404. `:resource` is the syntax shared by both Hono and Express 5 routers.
-  router.get('/.well-known/oauth-protected-resource/:resource', protectedResourceMetadata)
-
-  router.post('/register', async (req) => {
-    if (options.initialAccessToken) {
-      const expected = `Bearer ${options.initialAccessToken}`
-      if (req.authorization !== expected)
-        return { type: 'json', status: 401, data: { error: 'invalid_token' } }
-    }
-
-    purgeExpiredClients()
-    if (clientRegistry.size >= maxClients)
-      return { type: 'json', status: 429, data: { error: 'too_many_clients' } }
-
-    const body = await req.body()
-    const clientId = crypto.randomUUID()
-    const redirectUris = normalizeRedirectUris(body.redirect_uris)
-    if (!redirectUris)
-      return { type: 'json', status: 400, data: { error: 'invalid_redirect_uri' } }
-    clientRegistry.set(clientId, { redirectUris, expiresAt: Date.now() + clientTtl })
-    return {
-      type: 'json',
-      status: 201,
-      data: {
-        client_id: clientId,
-        client_id_issued_at: Math.floor(Date.now() / 1000),
-        redirect_uris: redirectUris,
-        grant_types: ['authorization_code', 'refresh_token'],
-        response_types: ['code'],
-        token_endpoint_auth_method: 'none',
+  router.post(
+    '/register',
+    createRegisterHandler({
+      initialAccessToken: options.initialAccessToken,
+      grantTypes: GRANT_TYPES,
+      registerClient: (redirectUris) => {
+        purgeExpiredClients()
+        if (clientRegistry.size >= maxClients) return null
+        const clientId = crypto.randomUUID()
+        clientRegistry.set(clientId, { redirectUris, expiresAt: Date.now() + clientTtl })
+        return clientId
       },
-    }
-  })
+    }),
+  )
 
   const getLoginPage = options.loginPage
     ? typeof options.loginPage === 'function' ? options.loginPage : () => options.loginPage as string
     : defaultLoginPage
 
-  router.get('/oauth/authorize', async (req) => {
-    const { redirect_uri, code_challenge, client_id, code_challenge_method, response_type } = req.query
-    if (!redirect_uri || !code_challenge || !client_id)
-      return { type: 'json', status: 400, data: { error: 'invalid_request' } }
-    if (response_type && response_type !== 'code')
-      return { type: 'json', status: 400, data: { error: 'unsupported_response_type' } }
-    if (code_challenge_method && code_challenge_method !== 'S256')
-      return { type: 'json', status: 400, data: { error: 'invalid_request', error_description: 'Only S256 code_challenge_method is supported' } }
-    const allowedUris = getClientUris(String(client_id))
-    if (!allowedUris)
-      return { type: 'json', status: 400, data: { error: 'invalid_client' } }
-    if (!allowedUris.includes(String(redirect_uri)))
-      return { type: 'json', status: 400, data: { error: 'invalid_redirect_uri' } }
-    try {
-      return { type: 'html', html: injectLoginScript(await getLoginPage()) }
-    } catch {
-      return { type: 'json', status: 500, data: { error: 'server_error', error_description: 'Failed to render login page' } }
-    }
-  })
+  router.get(
+    '/oauth/authorize',
+    createAuthorizeHandler({
+      resolveAllowedUris: getClientUris,
+      getLoginPage,
+      expectedResource,
+    }),
+  )
 
-  router.post('/login', async (req) => {
-    const body = await req.body()
-    const { email, password, redirect_uri, code_challenge, state, client_id } = body as Record<string, string>
-
-    // Validate again at login time: the form could bypass /oauth/authorize and POST directly
-    // with an arbitrary redirect_uri, so the allowlist check must be enforced here too.
-    if (!email || !password || !redirect_uri || !code_challenge)
-      return { type: 'json', status: 400, data: { error: 'invalid_request' } }
-
-    // Validate again at login time: the form could bypass /oauth/authorize and POST directly
-    // with an arbitrary redirect_uri, so the allowlist check must be enforced here too.
-    const allowedUris = client_id ? getClientUris(String(client_id)) : undefined
-    if (!allowedUris)
-      return { type: 'json', status: 400, data: { error: 'invalid_client' } }
-    if (!allowedUris.includes(String(redirect_uri)))
-      return { type: 'json', status: 400, data: { error: 'invalid_redirect_uri' } }
-
-    const user = await options.validateCredentials(String(email), String(password))
-    if (!user) return { type: 'json', status: 401, data: { error: 'Invalid credentials' } }
-
-    const code = randomCode()
-    await store.saveCode(code, user, String(code_challenge), Date.now() + 5 * 60 * 1000)
-
-    const redirectUrl = new URL(String(redirect_uri))
-    redirectUrl.searchParams.set('code', code)
-    if (state) redirectUrl.searchParams.set('state', String(state))
-    return { type: 'json', data: { redirectUrl: redirectUrl.toString() } }
-  })
+  router.post(
+    '/login',
+    createLoginHandler({
+      resolveAllowedUris: getClientUris,
+      authenticate: (email, password) => options.validateCredentials(email, password),
+      issueCode: async (user, codeChallenge) => {
+        const code = randomCode()
+        await store.saveCode(code, user, codeChallenge, Date.now() + 5 * 60 * 1000)
+        return code
+      },
+    }),
+  )
 
   router.post('/oauth/token', async (req) => {
     const body = await req.body()
     const { grant_type, code, code_verifier, refresh_token } = body as Record<string, string>
 
+    // RFC 8707: a token request naming a foreign resource must not be honored.
+    const audience = expectedResource(req)
+    const resourceError = checkResource(body.resource, audience)
+    if (resourceError) return resourceError
+
     if (grant_type === 'refresh_token') {
-      if (!refresh_token) return { type: 'json', status: 400, data: { error: 'invalid_request' } }
+      if (!refresh_token) return oauthError(400, 'invalid_request')
       const entry = await store.takeRefreshToken(String(refresh_token))
-      if (!entry) return { type: 'json', status: 400, data: { error: 'invalid_grant' } }
-      const accessToken = await signToken(entry.user, options.jwtSecret, ttl)
+      if (!entry) return oauthError(400, 'invalid_grant')
+      const accessToken = await signToken(entry.user, options.jwtSecret, ttl, audience)
       const newRefreshToken = randomToken()
       await store.saveRefreshToken(newRefreshToken, entry.user, Date.now() + refreshTtl * 1000)
       return { type: 'json', data: { access_token: accessToken, refresh_token: newRefreshToken, token_type: 'bearer', expires_in: ttl } }
     }
 
-    if (grant_type !== 'authorization_code') return { type: 'json', status: 400, data: { error: 'unsupported_grant_type' } }
-    if (!code || !code_verifier) return { type: 'json', status: 400, data: { error: 'invalid_request' } }
+    if (grant_type !== 'authorization_code') return oauthError(400, 'unsupported_grant_type')
+    if (!code || !code_verifier) return oauthError(400, 'invalid_request')
 
     const entry = await store.takeCode(String(code))
-    if (!entry) return { type: 'json', status: 400, data: { error: 'invalid_grant' } }
-    if (!(await pkceVerify(String(code_verifier), entry.codeChallenge))) return { type: 'json', status: 400, data: { error: 'invalid_grant' } }
+    if (!entry) return oauthError(400, 'invalid_grant')
+    if (!(await pkceVerify(String(code_verifier), entry.codeChallenge))) return oauthError(400, 'invalid_grant')
 
-    const accessToken = await signToken(entry.user, options.jwtSecret, ttl)
+    const accessToken = await signToken(entry.user, options.jwtSecret, ttl, audience)
     const newRefreshToken = randomToken()
     await store.saveRefreshToken(newRefreshToken, entry.user, Date.now() + refreshTtl * 1000)
     return { type: 'json', data: { access_token: accessToken, refresh_token: newRefreshToken, token_type: 'bearer', expires_in: ttl } }

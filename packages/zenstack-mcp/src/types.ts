@@ -105,12 +105,26 @@ export interface RouterAdapter {
   post(path: string, handler: RouteHandler): void;
 }
 
+/** Context passed by transport adapters when validating a Bearer token. */
+export interface McpTokenValidationContext {
+  /**
+   * Origin (`scheme://host[:port]`) the MCP request was received on. Used as
+   * the expected token audience (RFC 8707 resource binding) when the adapter
+   * has no explicitly configured `resource`.
+   */
+  origin?: string;
+}
+
 /** Common interface for all auth strategies */
 export interface McpAuthAdapter {
   /** Mount OAuth 2.0 discovery + token endpoints on a framework-agnostic router */
   mountRoutes(router: RouterAdapter): void;
-  /** Validate a Bearer token; return resolved user or throw */
-  validateToken(token: string): Promise<unknown>;
+  /**
+   * Validate a Bearer token; return resolved user or throw. `ctx` carries the
+   * request origin so implementations can enforce audience (`aud`) binding —
+   * rejecting tokens that were minted for a different server.
+   */
+  validateToken(token: string, ctx?: McpTokenValidationContext): Promise<unknown>;
 }
 
 /**
@@ -185,6 +199,20 @@ export interface McpBuiltInAuthOptions {
   initialAccessToken?: string;
   /** Maximum number of OAuth clients that can be registered (default: 100). */
   maxClients?: number;
+  /**
+   * Canonical resource URI of this MCP server (RFC 8707 resource indicator).
+   *
+   * Access tokens are minted with this value as their `aud` claim and rejected
+   * when presented to a server with a different resource — a token stolen from
+   * (or issued for) another service cannot be replayed here, and vice versa.
+   * Token requests naming a different `resource` are rejected with
+   * `invalid_target`.
+   *
+   * Defaults to the request origin, which is correct for single-domain
+   * deployments. Set explicitly when the server is reachable through several
+   * hostnames or behind a proxy that rewrites `Host`.
+   */
+  resource?: string;
   /**
    * Time-to-live for a registered OAuth client, in seconds (default: 86400 = 24h).
    *

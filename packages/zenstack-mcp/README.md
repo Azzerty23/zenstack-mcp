@@ -186,6 +186,10 @@ Wraps a [better-auth](https://better-auth.com) instance as an `McpAuthAdapter`.
 OAuth client registration only accepts `https://` redirect URIs, plus loopback
 `http://localhost` / `http://127.0.0.1` / `http://[::1]` callbacks for local development.
 
+Stateless access tokens are audience-bound to the better-auth `baseURL` (override
+with the `resource` option) — a token minted by another deployment sharing the
+same secret is rejected.
+
 ### `getRequestUser()`
 
 Returns the currently authenticated user from within a request handler.
@@ -250,6 +254,7 @@ the database can return:
 | `initialAccessToken` | Set for the built-in OAuth server — otherwise `/register` is open to anyone. Registered clients also expire after `clientTtl` (default 24h) to prevent registry exhaustion. |
 | `allowedOrigins` | Set when the server may be reached from a browser — rejects requests from any other `Origin` (DNS-rebinding protection). Native clients send no `Origin` and are unaffected. |
 | `jwtSecret` / better-auth `secret` | Must be ≥ 32 characters (enforced). Use a high-entropy random value. |
+| `resource` (audience binding) | Access tokens are bound to this server (RFC 8707): they carry an `aud` claim — the request origin by default, or the configured `resource` — and are rejected when presented to any other server, so a token issued for (or stolen from) another service cannot be replayed here. Token requests naming a foreign `resource` are rejected with `invalid_target`. Set `resource` explicitly when the server sits behind a proxy that rewrites `Host` or is reachable through several hostnames. better-auth *stateful* mode validates opaque sessions via better-auth and carries no `aud` claim. |
 | `transport` | Keep the default `"streamable-http"` for serverless/multi-instance hosts. `"sse"`/`"both"` keeps sessions in per-instance memory and **only works on a single instance**. |
 | better-auth stateless mode | Access tokens (default 1h) and refresh tokens are **not** individually revocable until they expire — revoking the underlying better-auth session is caught only at refresh time. Use short TTLs, `stateful: true` for immediate revocation (single-instance), or pass `refreshTokenReuse` to make refresh tokens one-time-use (rotation with stolen-token replay detection). |
 

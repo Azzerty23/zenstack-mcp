@@ -212,6 +212,12 @@ async function verifyPayload<T extends { exp: number }>(token: string, secret: s
 export interface AccessTokenPayload {
   user: unknown
   exp: number
+  /**
+   * Audience (RFC 8707): the canonical resource URI this token was minted for.
+   * Verified by validateToken so a token issued for another server (or another
+   * service signing with the same secret) is rejected here.
+   */
+  aud?: string
 }
 
 /**

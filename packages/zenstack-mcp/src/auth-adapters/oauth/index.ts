@@ -8,7 +8,12 @@ export function builtInMcpAuth(options: McpBuiltInAuthOptions): McpAuthAdapter {
   }
   return {
     mountRoutes: (router) => mountOAuthRoutes(router, options),
-    validateToken: (token: string) => verifyToken(token, options.jwtSecret),
+    // RFC 8707 audience binding: only accept tokens minted for this server —
+    // the configured `resource`, or failing that the origin the MCP request
+    // arrived on (passed by the transport adapters). Without an expected
+    // audience (direct call with no ctx), only signature/expiry are checked.
+    validateToken: (token, ctx) =>
+      verifyToken(token, options.jwtSecret, options.resource ?? ctx?.origin),
   };
 }
 

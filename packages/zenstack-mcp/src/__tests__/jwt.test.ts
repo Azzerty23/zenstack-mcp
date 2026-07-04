@@ -43,3 +43,29 @@ describe("signToken / verifyToken", () => {
     expect(t1).not.toBe(t2);
   });
 });
+
+describe("audience (aud) binding — RFC 8707", () => {
+  const AUD = "https://mcp.example";
+
+  test("round-trip with matching audience succeeds", async () => {
+    const token = await signToken({ id: "u1" }, SECRET, 3600, AUD);
+    const recovered = await verifyToken(token, SECRET, AUD);
+    expect(recovered).toEqual({ id: "u1" });
+  });
+
+  test("rejects a token minted for a different audience", async () => {
+    const token = await signToken({ id: "u1" }, SECRET, 3600, "https://other.example");
+    await expect(verifyToken(token, SECRET, AUD)).rejects.toThrow();
+  });
+
+  test("rejects a token without aud when an audience is expected", async () => {
+    const token = await signToken({ id: "u1" }, SECRET, 3600);
+    await expect(verifyToken(token, SECRET, AUD)).rejects.toThrow();
+  });
+
+  test("verification without expected audience still accepts aud-bearing tokens", async () => {
+    const token = await signToken({ id: "u1" }, SECRET, 3600, AUD);
+    const recovered = await verifyToken(token, SECRET);
+    expect(recovered).toEqual({ id: "u1" });
+  });
+});

@@ -1,12 +1,19 @@
-import type { McpAuthAdapter, RouterAdapter, GenericResponse } from "../../types.js";
-import { injectLoginScript, loginPage } from "../login-page.js";
+import type { McpAuthAdapter, RouterAdapter } from "../../types.js";
+import { loginPage } from "../login-page.js";
 import {
   createInMemoryTokenStore,
   pkceVerify,
   randomCode,
   randomToken,
 } from "../oauth/store.js";
-import { normalizeRedirectUris } from "../oauth/redirect-uri.js";
+import {
+  checkResource,
+  createAuthorizeHandler,
+  createLoginHandler,
+  createRegisterHandler,
+  mountDiscoveryRoutes,
+  oauthError,
+} from "../shared.js";
 import {
   decryptCode,
   encryptCode,
@@ -117,6 +124,14 @@ export function betterAuthMcpAdapter(
     /** Pre-shared bearer token required on `POST /register`. When omitted, registration is open. */
     initialAccessToken?: string;
     /**
+     * Canonical resource URI of this MCP server (RFC 8707 resource indicator).
+     * Defaults to the better-auth `baseURL`. Stateless access tokens are minted
+     * with this value as their `aud` claim and rejected when presented to a
+     * server with a different resource; token requests naming a different
+     * `resource` are rejected with `invalid_target`.
+     */
+    resource?: string;
+    /**
      * Force stateful mode.
      *
      * In stateful mode client_ids are opaque UUIDs stored in a per-instance Map and
@@ -186,6 +201,9 @@ export function betterAuthMcpAdapter(
   }
   const refreshTokenExpiresIn =
     options?.refreshTokenExpiresIn ?? 30 * 24 * 3600;
+  // RFC 8707: the canonical resource this server protects. Stateless access
+  // tokens carry it as `aud` and validateToken rejects any other audience.
+  const resource = options?.resource ?? base;
 
   return {
     mountRoutes(router: RouterAdapter) {
@@ -232,7 +250,7 @@ export function betterAuthMcpAdapter(
       ): Promise<string> {
         if (secret) {
           const accessToken = await signAccessToken(
-            { user: userPayload, exp: Date.now() + expiresIn * 1000 },
+            { user: userPayload, exp: Date.now() + expiresIn * 1000, aud: resource },
             secret,
           );
           const refreshToken = await signRefreshToken(
@@ -274,234 +292,81 @@ export function betterAuthMcpAdapter(
 
       // ── Routes ────────────────────────────────────────────────────────────
 
-      router.get("/.well-known/oauth-authorization-server", () => ({
-        type: "json",
-        data: {
-          issuer: base,
-          authorization_endpoint: `${base}/oauth/authorize`,
-          token_endpoint: `${base}/oauth/token`,
-          registration_endpoint: `${base}/register`,
-          response_types_supported: ["code"],
-          code_challenge_methods_supported: ["S256"],
-          grant_types_supported: secret
-            ? ["authorization_code", "refresh_token"]
-            : ["authorization_code"],
-        },
-      }));
-
-      const protectedResourceMetadata = (): GenericResponse => ({
-        type: "json",
-        data: {
-          resource: base,
-          authorization_servers: [base],
-          bearer_methods_supported: ["header"],
-        },
+      mountDiscoveryRoutes(router, {
+        issuer: () => base,
+        resource: () => resource,
+        grantTypes: secret
+          ? ["authorization_code", "refresh_token"]
+          : ["authorization_code"],
       });
 
-      router.get(
-        "/.well-known/oauth-protected-resource",
-        protectedResourceMetadata,
+      router.post(
+        "/register",
+        createRegisterHandler({
+          initialAccessToken: options?.initialAccessToken,
+          grantTypes: ["authorization_code"],
+          registerClient,
+        }),
       );
 
-      // RFC 9728 §3.1: clients probe the path-specific metadata
-      // (/.well-known/oauth-protected-resource/<resource>) before falling back to
-      // the root. Register the single-segment variant so common mounts (e.g.
-      // /mcp) don't 404. `:resource` is the syntax shared by Hono and Express 5.
       router.get(
-        "/.well-known/oauth-protected-resource/:resource",
-        protectedResourceMetadata,
-      );
-
-      router.post("/register", async (req) => {
-        if (options?.initialAccessToken) {
-          if (req.authorization !== `Bearer ${options.initialAccessToken}`)
-            return {
-              type: "json",
-              status: 401,
-              data: { error: "invalid_token" },
-            };
-        }
-        const body = (await req.body()) as { redirect_uris?: unknown };
-        const redirectUris = normalizeRedirectUris(body.redirect_uris);
-        if (!redirectUris)
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_redirect_uri" },
-          };
-
-        const clientId = await registerClient(redirectUris);
-        if (!clientId)
-          return {
-            type: "json",
-            status: 429,
-            data: { error: "too_many_clients" },
-          };
-
-        return {
-          type: "json",
-          status: 201,
-          data: {
-            client_id: clientId,
-            client_id_issued_at: Math.floor(Date.now() / 1000),
-            redirect_uris: redirectUris,
-            grant_types: ["authorization_code"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "none",
-          },
-        };
-      });
-
-      router.get("/oauth/authorize", async (req) => {
-        const {
-          redirect_uri,
-          code_challenge,
-          client_id,
-          code_challenge_method,
-          response_type,
-        } = req.query;
-        if (!redirect_uri || !code_challenge || !client_id)
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_request" },
-          };
-        if (response_type && response_type !== "code")
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "unsupported_response_type" },
-          };
-        if (code_challenge_method && code_challenge_method !== "S256")
-          return {
-            type: "json",
-            status: 400,
-            data: {
-              error: "invalid_request",
-              error_description: "Only S256 code_challenge_method is supported",
-            },
-          };
-        const allowedUris = await resolveAllowedUris(client_id);
-        if (!allowedUris)
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_client" },
-          };
-        if (!allowedUris.includes(redirect_uri))
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_redirect_uri" },
-          };
-        try {
-          const customPage = options?.loginPage;
-          const html = customPage
-            ? await (typeof customPage === "function"
+        "/oauth/authorize",
+        createAuthorizeHandler({
+          resolveAllowedUris,
+          getLoginPage: () => {
+            const customPage = options?.loginPage;
+            return customPage
+              ? typeof customPage === "function"
                 ? customPage()
-                : customPage)
-            : loginPage();
-          return { type: "html", html: injectLoginScript(html) };
-        } catch {
-          return {
-            type: "json",
-            status: 500,
-            data: {
-              error: "server_error",
-              error_description: "Failed to render login page",
-            },
-          };
-        }
-      });
+                : customPage
+              : loginPage();
+          },
+          expectedResource: () => resource,
+        }),
+      );
 
-      router.post("/login", async (req) => {
-        const {
-          email,
-          password,
-          redirect_uri,
-          code_challenge,
-          state,
-          client_id,
-        } = (await req.body()) as Record<string, string>;
-
-        if (!email || !password || !redirect_uri || !code_challenge)
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_request" },
-          };
-
-        // Validate redirect_uri again — the form could POST directly with an arbitrary
-        // redirect_uri, bypassing the /oauth/authorize allowlist check.
-        const allowedUris = client_id
-          ? await resolveAllowedUris(client_id)
-          : null;
-        if (!allowedUris || !allowedUris.includes(redirect_uri))
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_redirect_uri" },
-          };
-
-        let sessionToken: string | undefined;
-        let userPayload: unknown;
-        try {
-          const result = await (await getAuthInstance()).api.signInEmail({
-            body: { email, password },
-          });
-          sessionToken = result?.token;
-          userPayload = result?.user;
-        } catch {
-          // authentication failed — fall through to error response
-        }
-        if (!sessionToken)
-          return {
-            type: "json",
-            status: 401,
-            data: { error: "Invalid credentials" },
-          };
-
-        const code = await issueCode(userPayload, sessionToken, code_challenge);
-        const redirectUrl = new URL(redirect_uri);
-        redirectUrl.searchParams.set("code", code);
-        if (state) redirectUrl.searchParams.set("state", state);
-        return { type: "json", data: { redirectUrl: redirectUrl.toString() } };
-      });
+      router.post(
+        "/login",
+        createLoginHandler({
+          resolveAllowedUris,
+          authenticate: async (email, password) => {
+            try {
+              const result = await (await getAuthInstance()).api.signInEmail({
+                body: { email, password },
+              });
+              if (!result?.token) return null;
+              return {
+                sessionToken: result.token as string,
+                userPayload: result.user as unknown,
+              };
+            } catch {
+              return null; // authentication failed
+            }
+          },
+          issueCode: (auth, codeChallenge) =>
+            issueCode(auth.userPayload, auth.sessionToken, codeChallenge),
+        }),
+      );
 
       router.post("/oauth/token", async (req) => {
         const body = (await req.body()) as Record<string, string>;
         const { grant_type } = body;
 
+        // RFC 8707: a token request naming a foreign resource must not be honored.
+        const resourceError = checkResource(body.resource, resource);
+        if (resourceError) return resourceError;
+
         if (grant_type === "refresh_token") {
-          if (!secret)
-            return {
-              type: "json",
-              status: 400,
-              data: { error: "unsupported_grant_type" },
-            };
+          if (!secret) return oauthError(400, "unsupported_grant_type");
           const { refresh_token } = body;
-          if (!refresh_token)
-            return {
-              type: "json",
-              status: 400,
-              data: { error: "invalid_request" },
-            };
+          if (!refresh_token) return oauthError(400, "invalid_request");
           const rtPayload = await verifyRefreshToken(refresh_token, secret);
-          if (!rtPayload)
-            return {
-              type: "json",
-              status: 400,
-              data: { error: "invalid_grant" },
-            };
+          if (!rtPayload) return oauthError(400, "invalid_grant");
           // One-time-use rotation (opt-in): reject a token id we've already seen — the
           // signature of a stolen-token replay — then mark this one consumed.
           if (options?.refreshTokenReuse && rtPayload.jti) {
             if (await options.refreshTokenReuse.isConsumed(rtPayload.jti))
-              return {
-                type: "json",
-                status: 400,
-                data: { error: "invalid_grant" },
-              };
+              return oauthError(400, "invalid_grant");
             await options.refreshTokenReuse.consume(rtPayload.jti, rtPayload.exp);
           }
           // One DB call — validates the session is still alive and gets fresh user data.
@@ -510,14 +375,9 @@ export function betterAuthMcpAdapter(
               authorization: `Bearer ${rtPayload.sessionToken}`,
             }),
           });
-          if (!session)
-            return {
-              type: "json",
-              status: 400,
-              data: { error: "invalid_grant" },
-            };
+          if (!session) return oauthError(400, "invalid_grant");
           const accessToken = await signAccessToken(
-            { user: session.user, exp: Date.now() + expiresIn * 1000 },
+            { user: session.user, exp: Date.now() + expiresIn * 1000, aud: resource },
             secret,
           );
           const newRefreshToken = await signRefreshToken(
@@ -546,32 +406,14 @@ export function betterAuthMcpAdapter(
         }
 
         if (grant_type !== "authorization_code")
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "unsupported_grant_type" },
-          };
+          return oauthError(400, "unsupported_grant_type");
         const { code, code_verifier } = body;
-        if (!code || !code_verifier)
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_request" },
-          };
+        if (!code || !code_verifier) return oauthError(400, "invalid_request");
 
         const entry = await redeemCode(code);
-        if (!entry)
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_grant" },
-          };
+        if (!entry) return oauthError(400, "invalid_grant");
         if (!(await pkceVerify(code_verifier, entry.codeChallenge)))
-          return {
-            type: "json",
-            status: 400,
-            data: { error: "invalid_grant" },
-          };
+          return oauthError(400, "invalid_grant");
 
         const tokenResponse: Record<string, unknown> = {
           access_token: entry.user,
@@ -589,8 +431,11 @@ export function betterAuthMcpAdapter(
     validateToken: async (token: string) => {
       if (secret) {
         // Stateless: verify HMAC signature and extract embedded user — no DB round-trip.
+        // The audience must be this server's resource (RFC 8707): a token signed
+        // with the same secret but minted for another service is rejected.
         const payload = await verifyAccessToken(token, secret);
-        if (!payload) throw new Error("Invalid or expired token");
+        if (!payload || payload.aud !== resource)
+          throw new Error("Invalid or expired token");
         return payload.user;
       }
       // Stateful: session lookup via better-auth catches immediate revocations.

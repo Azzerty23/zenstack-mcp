@@ -5,18 +5,13 @@ import type { AuthType } from "@zenstackhq/orm";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import type {
-  McpAuthAdapter,
   McpServerConfig,
   RouterAdapter,
   GenericRequest,
 } from "../types.js";
-import {
-  isBuiltInAuthOptions,
-  builtInMcpAuth,
-} from "../auth-adapters/oauth/index.js";
 import { extractModels, buildMcpServer } from "../server.js";
 import { requestContext } from "../context.js";
-import { isOriginAllowed } from "./origin.js";
+import { authenticateMcpRequest, resolveAuthAdapter } from "./shared.js";
 
 function expressRouterAdapter(
   router: ReturnType<typeof Router>,
@@ -87,9 +82,7 @@ export function createExpressMcpHandler<Schema extends SchemaDef>(
     );
   }
 
-  const authAdapter: McpAuthAdapter = isBuiltInAuthOptions(config.auth)
-    ? builtInMcpAuth(config.auth)
-    : (config.auth as McpAuthAdapter);
+  const authAdapter = resolveAuthAdapter(config.auth);
 
   // OAuth routes — mount at root so discovery is at /.well-known/oauth-authorization-server
   const oauthRouter = Router();
@@ -103,40 +96,21 @@ export function createExpressMcpHandler<Schema extends SchemaDef>(
   mcpRouter.use(urlencoded({ extended: false }));
 
   mcpRouter.use(async (req: Request, res: Response, next: NextFunction) => {
-    // DNS-rebinding guard: reject browser requests from a disallowed Origin (no-op
-    // when allowedOrigins is unset, and native clients send no Origin header).
-    if (!isOriginAllowed(req.headers.origin, config.allowedOrigins)) {
-      res
-        .status(403)
-        .json({ error: "forbidden", error_description: "Origin not allowed" });
+    const result = await authenticateMcpRequest(
+      authAdapter,
+      config.allowedOrigins,
+      {
+        origin: `${req.protocol}://${req.get("host")}`,
+        originHeader: req.headers.origin,
+        authorization: req.headers.authorization,
+      },
+    );
+    if (!result.ok) {
+      res.status(result.status).set(result.headers).json(result.body);
       return;
     }
-
-    // Point unauthenticated clients at the protected-resource metadata so they can
-    // discover the authorization server (MCP Authorization spec / RFC 9728).
-    const origin = `${req.protocol}://${req.get("host")}`;
-    const wwwAuthenticate = `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"`;
-
-    const authHeader = req.headers.authorization;
-    if (!authHeader?.startsWith("Bearer ")) {
-      res.status(401).set("WWW-Authenticate", wwwAuthenticate).json({
-        error: "unauthorized",
-        error_description: "Bearer token required",
-      });
-      return;
-    }
-
-    try {
-      const token = authHeader.slice(7);
-      (req as Request & { mcpUser: unknown }).mcpUser =
-        await authAdapter.validateToken(token);
-      next();
-    } catch {
-      res
-        .status(401)
-        .set("WWW-Authenticate", wwwAuthenticate)
-        .json({ error: "invalid_token" });
-    }
+    (req as Request & { mcpUser: unknown }).mcpUser = result.user;
+    next();
   });
 
   const models = extractModels(config);

@@ -3,21 +3,15 @@ import type { SchemaDef } from "@zenstackhq/schema";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 
 import type {
-  McpAuthAdapter,
-  McpBuiltInAuthOptions,
   McpServerConfig,
   RouterAdapter,
   GenericRequest,
   GenericResponse,
 } from "../types.js";
-import {
-  builtInMcpAuth,
-  isBuiltInAuthOptions,
-} from "../auth-adapters/oauth/index.js";
 import { extractModels, buildMcpServer } from "../server.js";
 import type { AuthType } from "@zenstackhq/orm";
 import { requestContext } from "../context.js";
-import { isOriginAllowed } from "./origin.js";
+import { authenticateMcpRequest, resolveAuthAdapter } from "./shared.js";
 
 // Re-exported from the runtime adapter so Workers consumers can read the
 // authenticated user without importing the bare `zenstack-mcp` entry, whose
@@ -25,12 +19,6 @@ import { isOriginAllowed } from "./origin.js";
 // @zenstackhq/sdk → @zenstackhq/language, which calls createRequire() at module
 // init and crashes in the Cloudflare Workers runtime).
 export { getRequestUser } from "../context.js";
-
-function resolveAuthAdapter(
-  auth: McpAuthAdapter | McpBuiltInAuthOptions,
-): McpAuthAdapter {
-  return isBuiltInAuthOptions(auth) ? builtInMcpAuth(auth) : auth;
-}
 
 export type HonoMcpEnv = { Variables: { user: unknown } };
 type Env = HonoMcpEnv;
@@ -115,39 +103,19 @@ export function createHonoMcpHandler<Schema extends SchemaDef>(
   const mcpApp = new Hono<Env>();
 
   mcpApp.use("/*", async (c, next) => {
-    // DNS-rebinding guard: reject browser requests from a disallowed Origin (no-op
-    // when allowedOrigins is unset, and native clients send no Origin header).
-    if (!isOriginAllowed(c.req.header("Origin"), config.allowedOrigins)) {
-      return c.json(
-        { error: "forbidden", error_description: "Origin not allowed" },
-        403,
-      );
+    const result = await authenticateMcpRequest(
+      authAdapter,
+      config.allowedOrigins,
+      {
+        origin: new URL(c.req.url).origin,
+        originHeader: c.req.header("Origin"),
+        authorization: c.req.header("Authorization"),
+      },
+    );
+    if (!result.ok) {
+      return c.json(result.body, result.status, result.headers);
     }
-
-    // Point unauthenticated clients at the protected-resource metadata so they can
-    // discover the authorization server (MCP Authorization spec / RFC 9728).
-    const resourceMetadata = `${new URL(c.req.url).origin}/.well-known/oauth-protected-resource`;
-    const wwwAuthenticate = `Bearer resource_metadata="${resourceMetadata}"`;
-
-    const authHeader = c.req.header("Authorization");
-    if (!authHeader?.startsWith("Bearer ")) {
-      return c.json(
-        { error: "unauthorized", error_description: "Bearer token required" },
-        401,
-        { "WWW-Authenticate": wwwAuthenticate },
-      );
-    }
-
-    try {
-      const token = authHeader.slice(7);
-      const user = await authAdapter.validateToken(token);
-      c.set("user", user);
-    } catch {
-      return c.json({ error: "invalid_token" }, 401, {
-        "WWW-Authenticate": wwwAuthenticate,
-      });
-    }
-
+    c.set("user", result.user);
     return next();
   });
 
