@@ -1,7 +1,8 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { McpModelDef, McpProcedureDef } from '../types.js'
+import type { McpModelDef, McpOperation, McpProcedureDef } from '../types.js'
 import { renderSchema } from './schema-renderer.js'
+import { OPERATION_SCHEMA_METHOD, type QuerySchemaFactory } from './validate.js'
 
 const OPERATION_DOCS: Record<string, { description: string; example: unknown }> = {
   findMany: {
@@ -90,6 +91,8 @@ export function registerSchemaTool(
   server: McpServer,
   models: McpModelDef[],
   procedures: McpProcedureDef[] = [],
+  factory?: QuerySchemaFactory,
+  relationDepth?: number,
 ): void {
   server.registerTool('schema', {
     description:
@@ -97,11 +100,13 @@ export function registerSchemaTool(
       '(queried via the `execute` tool) and any custom procedures (invoked via the `procedure` tool), ' +
       'followed by a reference of operation arguments with examples. ' +
       'Call this first to understand what data you can query, what procedures you can invoke, and how to structure arguments. ' +
-      'Pass a model name to retrieve schema for a single model only.',
+      'Pass a model name to retrieve schema for a single model only. ' +
+      'Pass both model and operation to get the exact JSON Schema of the `execute` args for that operation.',
     inputSchema: {
       model: z.string().optional().describe('Filter to a single model by name (PascalCase). Omit to return all models. Does not affect the returned procedures.'),
+      operation: z.string().optional().describe('With model: return the exact JSON Schema of the `execute` args for this operation (e.g. "findMany").'),
     },
-  }, async ({ model }) => {
+  }, async ({ model, operation }) => {
     const filtered = model
       ? models.filter((m) => m.name === model)
       : models
@@ -115,6 +120,42 @@ export function registerSchemaTool(
           }),
         }],
         isError: true,
+      }
+    }
+
+    if (operation) {
+      const modelDef = model ? filtered[0] : undefined
+      const method = OPERATION_SCHEMA_METHOD[operation as McpOperation]
+      const error = !model
+        ? '"operation" requires "model" to be set as well.'
+        : !method
+          ? `Unknown operation "${operation}". Available: ${Object.keys(OPERATION_SCHEMA_METHOD).join(', ')}`
+          : !modelDef!.operations.includes(operation as McpOperation)
+            ? `Operation "${operation}" not available on "${model}". Available: ${modelDef!.operations.join(', ')}`
+            : !factory
+              ? 'Operation schemas are not available on this server.'
+              : undefined
+      if (error) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error }) }], isError: true }
+      }
+
+      try {
+        const opts = relationDepth !== undefined && Number.isFinite(relationDepth)
+          ? { relationDepth }
+          : undefined
+        const schema = factory![method](model!, opts)
+        // `unrepresentable: 'any'` maps JSON-Schema-less types (Date, custom
+        // scalars like Decimal/Bytes) to `{}` instead of throwing.
+        const jsonSchema = z.toJSONSchema(schema as unknown as z.ZodType, { io: 'input', unrepresentable: 'any' })
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ model, operation, argsSchema: jsonSchema }) }],
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return {
+          content: [{ type: 'text', text: JSON.stringify({ error: `Cannot build schema for "${operation}" on "${model}": ${message}` }) }],
+          isError: true,
+        }
       }
     }
 

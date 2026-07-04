@@ -97,7 +97,8 @@ export class SchemaType implements SchemaDef {
             },
             attributes: [
                 { name: "@@allow", args: [{ name: "operation", value: ExpressionUtils.literal("read") }, { name: "condition", value: ExpressionUtils.binary(ExpressionUtils.field("published"), "||", ExpressionUtils.binary(ExpressionUtils.call("auth"), "==", ExpressionUtils.field("author"))) }] },
-                { name: "@@allow", args: [{ name: "operation", value: ExpressionUtils.literal("create,update,delete") }, { name: "condition", value: ExpressionUtils.binary(ExpressionUtils.call("auth"), "==", ExpressionUtils.field("author")) }] }
+                { name: "@@allow", args: [{ name: "operation", value: ExpressionUtils.literal("create,update,delete") }, { name: "condition", value: ExpressionUtils.binary(ExpressionUtils.call("auth"), "==", ExpressionUtils.field("author")) }] },
+                { name: "@@mcp", args: [{ name: "limit", value: ExpressionUtils.literal(10) }] }
             ] as readonly AttributeApplication[],
             idFields: ["id"],
             uniqueFields: {

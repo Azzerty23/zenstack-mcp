@@ -5,6 +5,6 @@ import type { McpConfig } from 'zenstack-mcp'
 export const mcpConfig: McpConfig = {
   models: {
     "User": { exposed: true },
-    "Post": { exposed: true }
+    "Post": { exposed: true, limit: 10 }
   }
 }

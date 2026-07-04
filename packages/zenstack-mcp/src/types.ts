@@ -9,9 +9,9 @@ import type { AuthType } from "@zenstackhq/orm";
  * of truth means the exposed surface never drifts from the client — adding or
  * renaming an operation in ZenStack is reflected here automatically.
  *
- * Operations without a dedicated entry in `ARG_STRUCT_SCHEMAS`
- * (`tools/validate.ts`) skip structural arg validation and pass through to the
- * client as-is; add an entry there to tighten validation for a new operation.
+ * Every operation maps to a full-args zod schema from the ORM's own
+ * `createQuerySchemaFactory` (see `OPERATION_SCHEMA_METHOD` in
+ * `tools/validate.ts`); a new ZenStack operation needs a mapping entry there.
  */
 export const ALL_OPERATIONS = AllCrudOperations;
 export type McpOperation = (typeof ALL_OPERATIONS)[number];
@@ -36,6 +36,9 @@ export interface McpModelDef {
   mapName?: string;
   operations: McpOperation[];
   fields: McpFieldDef[];
+  /** Per-model cap on `take` (from `@@mcp(limit: N)`); the effective cap is
+   *  min(limit, McpServerConfig.maxTake). */
+  limit?: number;
 }
 
 /** A single parameter of a custom ZenStack procedure. */
@@ -66,6 +69,8 @@ export interface McpConfig {
       exposed: boolean;
       /** Whitelist of operations to expose for this model (default: all operations). */
       operations?: McpOperation[];
+      /** Cap on `take` for list reads of this model (from `@@mcp(limit: N)`). */
+      limit?: number;
     }
   >;
   /**
@@ -260,6 +265,22 @@ export interface McpServerConfig<Schema extends SchemaDef> {
    * Defaults to `false`. Enable explicitly in production.
    */
   requireWhereForBulk?: boolean;
+  /**
+   * Maximum relation-nesting depth accepted in operation args (where/select/
+   * include/data). Passed to the ORM's query schema factory; args nesting
+   * deeper than this are rejected at validation time. Keeping it low also
+   * keeps the JSON schemas returned by the `schema` tool small enough for LLM
+   * context windows.
+   *
+   * Defaults to `2`. Set to `Infinity` for unlimited depth (the ORM default).
+   */
+  relationDepth?: number;
+  /**
+   * Global cap on `take` for list reads (`findMany`, `findFirst`, …). A call
+   * with `take` above the cap is rejected. Per-model `@@mcp(limit: N)` caps
+   * combine with this via `min`. When omitted, only per-model limits apply.
+   */
+  maxTake?: number;
   /**
    * Browser-origin allowlist for the MCP endpoint, guarding against DNS-rebinding
    * attacks (a malicious web page driving a localhost/private MCP server from the

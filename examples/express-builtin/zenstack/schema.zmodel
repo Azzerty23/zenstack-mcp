@@ -41,4 +41,7 @@ model Post {
   // Only the author can create, update, or delete their own posts.
   @@allow('read', published || auth() == author)
   @@allow('create,update,delete', auth() == author)
+
+  // Cap list reads at 10 records via the MCP `execute` tool.
+  @@mcp(limit: 10)
 }

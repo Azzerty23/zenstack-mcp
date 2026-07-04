@@ -1,7 +1,14 @@
 import { describe, test, expect } from "bun:test";
+import { createQuerySchemaFactory } from "@zenstackhq/orm";
 import { registerProcedureTool } from "../tools/procedure-tool.js";
 import { requestContext } from "../context.js";
 import type { McpProcedureDef } from "../types.js";
+import type { QuerySchemaFactory } from "../tools/validate.js";
+import { testSchema } from "./fixtures/test-schema.js";
+
+// Real ORM factory — procedure args are validated against the fixture's
+// `checkout(cartId: String, coupon?: String)` declaration.
+const factory = createQuerySchemaFactory(testSchema) as unknown as QuerySchemaFactory;
 
 const mockProcedures: McpProcedureDef[] = [
   {
@@ -40,7 +47,7 @@ function parseText(result: ToolOutput) {
 describe("procedure tool — input validation", () => {
   test("unknown procedure returns isError", async () => {
     const server = buildMockServer();
-    registerProcedureTool(server as never, mockProcedures, async () => ({} as never));
+    registerProcedureTool(server as never, mockProcedures, async () => ({} as never), factory);
     const result = await server.call({ name: "refund", args: {} });
     expect(result.isError).toBe(true);
     expect(parseText(result).success).toBe(false);
@@ -48,18 +55,26 @@ describe("procedure tool — input validation", () => {
 
   test("missing required parameter returns isError", async () => {
     const server = buildMockServer();
-    registerProcedureTool(server as never, mockProcedures, async () => ({} as never));
+    registerProcedureTool(server as never, mockProcedures, async () => ({} as never), factory);
     const result = await server.call({ name: "checkout", args: { coupon: "SAVE10" } });
     expect(result.isError).toBe(true);
     const body = parseText(result);
     expect(body.success).toBe(false);
-    expect(body.error).toContain("cartId");
+    expect(JSON.stringify(body.errors)).toContain("cartId");
   });
 
-  test("null value for a required parameter is treated as missing", async () => {
+  test("null value for a required parameter is rejected", async () => {
     const server = buildMockServer();
-    registerProcedureTool(server as never, mockProcedures, async () => ({} as never));
+    registerProcedureTool(server as never, mockProcedures, async () => ({} as never), factory);
     const result = await server.call({ name: "checkout", args: { cartId: null } });
+    expect(result.isError).toBe(true);
+    expect(parseText(result).success).toBe(false);
+  });
+
+  test("wrong parameter type is rejected", async () => {
+    const server = buildMockServer();
+    registerProcedureTool(server as never, mockProcedures, async () => ({} as never), factory);
+    const result = await server.call({ name: "checkout", args: { cartId: 42 } });
     expect(result.isError).toBe(true);
     expect(parseText(result).success).toBe(false);
   });
@@ -73,6 +88,7 @@ describe("procedure tool — input validation", () => {
         ({
           $procs: { checkout: async () => ({ id: "order-1" }) },
         }) as never,
+      factory,
     );
     const result = await server.call({ name: "checkout", args: { cartId: "cart-1" } });
     expect(result.isError).toBeUndefined();
@@ -97,6 +113,7 @@ describe("procedure tool — dispatch", () => {
             },
           },
         }) as never,
+      factory,
     );
 
     const result = await server.call({ name: "checkout", args: { cartId: "cart-1", coupon: "SAVE10" } });
@@ -119,6 +136,7 @@ describe("procedure tool — dispatch", () => {
             checkout: async () => { throw new Error("payment declined"); },
           },
         }) as never,
+      factory,
     );
 
     const result = await server.call({ name: "checkout", args: { cartId: "cart-1" } });
@@ -134,6 +152,7 @@ describe("procedure tool — dispatch", () => {
       server as never,
       mockProcedures,
       async () => ({ $procs: {} }) as never, // no checkout
+      factory,
     );
 
     const result = await server.call({ name: "checkout", args: { cartId: "cart-1" } });
@@ -147,6 +166,7 @@ describe("procedure tool — dispatch", () => {
       server as never,
       mockProcedures,
       async () => ({}) as never,
+      factory,
     );
 
     const result = await server.call({ name: "checkout", args: { cartId: "cart-1" } });
@@ -167,6 +187,7 @@ describe("procedure tool — request context", () => {
         capturedUser = user;
         return { $procs: { checkout: async () => ({}) } } as never;
       },
+      factory,
     );
 
     await new Promise<void>((resolve) => {

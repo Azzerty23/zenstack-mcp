@@ -2,7 +2,7 @@ import { describe, test, expect } from "bun:test";
 import { registerExecuteTool } from "../tools/execute-tool.js";
 import { requestContext } from "../context.js";
 import type { McpModelDef } from "../types.js";
-import type { ZodFactory } from "../tools/validate.js";
+import type { QuerySchemaFactory } from "../tools/validate.js";
 
 const mockFields = [
   { name: "id", type: "String", isId: true, isUnique: true, isRequired: true, isList: false, isRelation: false },
@@ -18,10 +18,11 @@ const mockModels: McpModelDef[] = [
   },
 ];
 
-// ZodFactory that accepts any data — keeps tests focused on dispatch logic.
-const passAllFactory: ZodFactory = {
-  makeModelSchema: () => ({ safeParse: () => ({ success: true }) }),
-};
+// Factory that accepts any args — keeps tests focused on dispatch logic.
+const passAllFactory = new Proxy(
+  {},
+  { get: () => () => ({ safeParse: () => ({ success: true }) }) },
+) as unknown as QuerySchemaFactory;
 
 type ToolInput = { model: string; operation: string; args: Record<string, unknown> };
 type ToolOutput = { content: Array<{ type: string; text: string }>; isError?: boolean };

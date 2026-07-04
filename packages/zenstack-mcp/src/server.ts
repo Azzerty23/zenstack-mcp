@@ -1,11 +1,12 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createSchemaFactory } from "@zenstackhq/zod";
+import { createQuerySchemaFactory } from "@zenstackhq/orm";
 import type { McpModelDef, McpProcedureDef, McpServerConfig } from "./types.js";
 import { ALL_OPERATIONS } from "./types.js";
 import { registerSchemaTool } from "./tools/schema-tool.js";
 import { registerExecuteTool } from "./tools/execute-tool.js";
 import { registerProcedureTool } from "./tools/procedure-tool.js";
 import { registerMeTool } from "./tools/me-tool.js";
+import type { QuerySchemaFactory } from "./tools/validate.js";
 import type { SchemaDef } from "@zenstackhq/schema";
 
 type RawAttributeArg = {
@@ -126,13 +127,16 @@ export function extractModels<Schema extends SchemaDef>(
     filtered = allModels;
   }
 
-  // Apply per-model operation restrictions from mcpConfig or modelOperations option
+  // Apply per-model operation restrictions from mcpConfig or modelOperations
+  // option, plus the per-model take limit from @@mcp(limit: N).
   return filtered.map((m) => {
+    const limit = config.mcpConfig?.models[m.name]?.limit;
+    const base = limit !== undefined ? { ...m, limit } : m;
     const fromOption = config.modelOperations?.[m.name];
-    if (fromOption) return { ...m, operations: fromOption };
+    if (fromOption) return { ...base, operations: fromOption };
     const fromConfig = config.mcpConfig?.models[m.name]?.operations;
-    if (fromConfig) return { ...m, operations: fromConfig };
-    return m;
+    if (fromConfig) return { ...base, operations: fromConfig };
+    return base;
   });
 }
 
@@ -166,30 +170,43 @@ export function extractProcedures<Schema extends SchemaDef>(
   return all.filter((p) => procCfg[p.name]?.exposed === true);
 }
 
+// The factory caches the zod schemas it builds internally, but buildMcpServer
+// runs on every request in the stateless HTTP adapters — memoize per schema
+// object so the cache actually survives across requests.
+const factoryCache = new WeakMap<object, QuerySchemaFactory>();
+
+function getQuerySchemaFactory(schema: SchemaDef): QuerySchemaFactory {
+  let factory = factoryCache.get(schema);
+  if (!factory) {
+    factory = createQuerySchemaFactory(schema) as unknown as QuerySchemaFactory;
+    factoryCache.set(schema, factory);
+  }
+  return factory;
+}
+
 export function buildMcpServer<Schema extends SchemaDef>(
   models: McpModelDef[],
   config: McpServerConfig<Schema>,
 ): McpServer {
-  const factory = createSchemaFactory(config.schema);
+  const factory = getQuerySchemaFactory(config.schema);
   const server = new McpServer({
     name: config.name ?? "zenstack-mcp",
     version: config.version ?? "0.1.0",
   });
 
   const procedures = extractProcedures(config);
+  const validateOptions = {
+    requireWhereForBulk: config.requireWhereForBulk,
+    relationDepth: config.relationDepth ?? 2,
+    maxTake: config.maxTake,
+  };
 
-  registerSchemaTool(server, models, procedures);
+  registerSchemaTool(server, models, procedures, factory, validateOptions.relationDepth);
   registerMeTool(server);
-  registerExecuteTool(
-    server,
-    models,
-    config.getClient,
-    factory as Parameters<typeof registerExecuteTool>[3],
-    config.requireWhereForBulk,
-  );
+  registerExecuteTool(server, models, config.getClient, factory, validateOptions);
 
   if (procedures.length > 0) {
-    registerProcedureTool(server, procedures, config.getClient);
+    registerProcedureTool(server, procedures, config.getClient, factory);
   }
 
   // Host-defined tools (e.g. oRPC-backed), registered last so they can't be

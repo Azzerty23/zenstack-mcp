@@ -4,6 +4,7 @@ import type { McpProcedureDef, McpServerConfig } from "../types.js";
 import type { SchemaDef } from "@zenstackhq/schema";
 import type { AuthType } from "@zenstackhq/orm";
 import { getRequestUser } from "../context.js";
+import type { QuerySchemaFactory } from "./validate.js";
 
 /** Minimal structural view of a ZenStack client's `$procs` surface. */
 type ProcClient = {
@@ -30,6 +31,7 @@ export function registerProcedureTool<Schema extends SchemaDef>(
   server: McpServer,
   procedures: McpProcedureDef[],
   getClient: McpServerConfig<Schema>["getClient"],
+  factory: QuerySchemaFactory,
 ): void {
   const names = procedures.map((p) => p.name) as [string, ...string[]];
   const catalog = procedures.map(signature).join("\n");
@@ -67,22 +69,28 @@ export function registerProcedureTool<Schema extends SchemaDef>(
         };
       }
 
-      const missing = def.params
-        .filter(
-          (p) =>
-            p.isRequired &&
-            (args?.[p.name] === undefined || args?.[p.name] === null),
-        )
-        .map((p) => p.name);
-      if (missing.length) {
+      // Validate args against the ORM's own procedure schema (types, required
+      // params, unknown keys).
+      const errors: string[] = [];
+      try {
+        const result = factory.makeProcedureArgsSchema(name).safeParse(args ?? {});
+        if (!result.success && result.error) {
+          errors.push(
+            ...result.error.issues.map((i) =>
+              i.path.length > 0 ? `${i.path.join(".")}: ${i.message}` : i.message,
+            ),
+          );
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        errors.push(`Cannot validate procedure "${name}": ${message}`);
+      }
+      if (errors.length) {
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({
-                success: false,
-                error: `Missing required parameter(s): ${missing.join(", ")}`,
-              }),
+              text: JSON.stringify({ success: false, errors }),
             },
           ],
           isError: true,

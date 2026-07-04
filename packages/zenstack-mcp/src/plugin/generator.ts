@@ -1,5 +1,6 @@
 import type { CliGeneratorContext } from '@zenstackhq/sdk'
 import { ModelUtils } from '@zenstackhq/sdk'
+import type { DataModel, Procedure } from '@zenstackhq/language/ast'
 import { writeFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -10,8 +11,9 @@ import { join } from 'node:path'
 // a different major of langium (e.g. 3.x → 4.x rewrote AbstractAstReflection).
 // `DataModel` and `Procedure` are concrete leaf node types, so a `$type`
 // equality check is exactly equivalent to the reflection-based guards.
-const isDataModel = (d: { $type: string }) => d.$type === 'DataModel'
-const isProcedure = (d: { $type: string }) => d.$type === 'Procedure'
+// (Type-only imports above are erased at build time — nothing gets bundled.)
+const isDataModel = (d: { $type: string }): d is DataModel => d.$type === 'DataModel'
+const isProcedure = (d: { $type: string }): d is Procedure => d.$type === 'Procedure'
 
 export async function generate(context: CliGeneratorContext): Promise<void> {
   const { model, defaultOutputPath, pluginOptions } = context
@@ -23,20 +25,29 @@ export async function generate(context: CliGeneratorContext): Promise<void> {
   const modelEntries: string[] = dataModels.map((dm) => {
     const mcpAttr = ModelUtils.getAttribute(dm, '@@mcp')
     let exposed: boolean
+    let limit: number | undefined
 
     if (mcpAttr) {
-      const arg = mcpAttr.args?.[0]
-      // Default arg (expose) — if present check its value, else default to true
-      if (arg?.value?.$type === 'BooleanLiteral') {
-        exposed = (arg.value as { value: boolean }).value
+      const args = mcpAttr.args ?? []
+      // Default arg (expose) — positional or named; if present check its value,
+      // else default to true
+      const exposeArg = args.find((a) => !a.name || a.name === 'expose')
+      if (exposeArg?.value?.$type === 'BooleanLiteral') {
+        exposed = (exposeArg.value as { value: boolean }).value
       } else {
         exposed = true
+      }
+      const limitArg = args.find((a) => a.name === 'limit')
+      if (limitArg?.value?.$type === 'NumberLiteral') {
+        const parsed = Number((limitArg.value as { value: string | number }).value)
+        if (Number.isFinite(parsed)) limit = parsed
       }
     } else {
       exposed = globalExpose
     }
 
-    return `    ${JSON.stringify(dm.name)}: { exposed: ${exposed} }`
+    const limitPart = limit !== undefined ? `, limit: ${limit}` : ''
+    return `    ${JSON.stringify(dm.name)}: { exposed: ${exposed}${limitPart} }`
   })
 
   // Custom procedures (`procedure` / `mutation procedure`). Exposed per the

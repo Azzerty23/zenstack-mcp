@@ -4,14 +4,18 @@ import type { McpModelDef, McpServerConfig, ZenStackClientShape } from "../types
 import type { SchemaDef } from "@zenstackhq/schema";
 import type { AuthType } from "@zenstackhq/orm";
 import { getRequestUser } from "../context.js";
-import { validateOperation, type ZodFactory } from "./validate.js";
+import {
+  validateOperation,
+  type QuerySchemaFactory,
+  type ValidateOptions,
+} from "./validate.js";
 
 export function registerExecuteTool<Schema extends SchemaDef>(
   server: McpServer,
   models: McpModelDef[],
   getClient: McpServerConfig<Schema>["getClient"],
-  zodFactory: ZodFactory,
-  requireWhereForBulk?: boolean,
+  factory: QuerySchemaFactory,
+  options: ValidateOptions = {},
 ): void {
   const modelNames = models.map((m) => m.name) as [string, ...string[]];
   const allOps = [
@@ -23,7 +27,8 @@ export function registerExecuteTool<Schema extends SchemaDef>(
     {
       description:
         "Executes a database operation on the ZenStack-enhanced client. " +
-        "Access policies from the ZenStack schema are enforced automatically.",
+        "Access policies from the ZenStack schema are enforced automatically. " +
+        "Call `schema` with a model and operation to get the exact JSON Schema of `args`.",
       inputSchema: {
         model: z.enum(modelNames).describe("Model name (PascalCase)"),
         operation: z.enum(allOps).describe("Operation name"),
@@ -31,7 +36,7 @@ export function registerExecuteTool<Schema extends SchemaDef>(
       },
     },
     async ({ model, operation, args }) => {
-      const validation = validateOperation(models, model, operation, args, zodFactory, requireWhereForBulk);
+      const validation = validateOperation(models, model, operation, args, factory, options);
       if (!validation.valid) {
         return {
           content: [

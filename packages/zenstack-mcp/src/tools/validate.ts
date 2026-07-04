@@ -1,92 +1,81 @@
-import { z } from "zod";
 import type { McpModelDef, McpOperation } from "../types.js";
-import {
-  buildWhereSchema,
-  buildWhereUniqueSchema,
-  buildOrderBySchema,
-} from "./schema-generator.js";
-
-const anyObj = z.record(z.string(), z.unknown());
-const dataObj = z.record(z.string(), z.unknown());
-
-const ARG_STRUCT_SCHEMAS: Partial<Record<McpOperation, z.ZodTypeAny>> = {
-  findUnique: z.looseObject({ where: anyObj }),
-  findUniqueOrThrow: z.looseObject({ where: anyObj }),
-  findFirst: z.looseObject({ where: anyObj.optional() }),
-  findFirstOrThrow: z.looseObject({ where: anyObj.optional() }),
-  findMany: z.looseObject({
-    where: anyObj.optional(),
-    skip: z.number().int().nonnegative().optional(),
-    take: z.number().int().optional(),
-    cursor: anyObj.optional(),
-  }),
-  create: z.looseObject({ data: dataObj }),
-  createMany: z.looseObject({ data: z.array(dataObj) }),
-  createManyAndReturn: z.looseObject({ data: z.array(dataObj) }),
-  update: z.looseObject({ where: anyObj, data: dataObj }),
-  updateMany: z.looseObject({ where: anyObj.optional(), data: dataObj }),
-  updateManyAndReturn: z.looseObject({ where: anyObj.optional(), data: dataObj }),
-  upsert: z.looseObject({ where: anyObj, create: dataObj, update: dataObj }),
-  delete: z.looseObject({ where: anyObj }),
-  deleteMany: z.looseObject({ where: anyObj.optional() }),
-  count: z.looseObject({ where: anyObj.optional() }),
-  exists: z.looseObject({ where: anyObj.optional() }),
-  // Analytical ops carry a different arg shape (_count/_sum/_avg/having, etc.);
-  // we structurally validate only the part we model (where/by) and pass the rest through.
-  aggregate: z.looseObject({ where: anyObj.optional() }),
-  groupBy: z.looseObject({ by: z.union([z.string(), z.array(z.string())]) }),
-};
 
 type ZodIssue = { message: string; path: Array<string | number> };
 
-type ModelSchema = {
+type ArgsSchema = {
   safeParse: (v: unknown) => {
     success: boolean;
     error?: { issues: ZodIssue[] };
   };
 };
 
-function formatIssues(issues: ZodIssue[], prefix?: string): string[] {
-  return issues.map((i) => {
-    const path = i.path.length > 0 ? i.path.join(".") : undefined;
-    const location = [prefix, path].filter(Boolean).join(".");
-    return location ? `${location}: ${i.message}` : i.message;
-  });
-}
-
-function validateData(
-  schema: ModelSchema,
-  data: unknown,
-  prefix: string,
-  errors: string[],
-): void {
-  const result = schema.safeParse(data);
-  if (!result.success && result.error) {
-    errors.push(...formatIssues(result.error.issues as ZodIssue[], prefix));
-  }
-}
-
-export type ZodFactory = {
-  makeModelSchema: (
+/**
+ * Structural view of the ORM's `ZodSchemaFactory` (from
+ * `createQuerySchemaFactory` in `@zenstackhq/orm`), limited to the methods we
+ * call. Keeping it structural avoids threading the Schema generic through
+ * every tool and keeps tests mockable.
+ */
+export type QuerySchemaFactory = {
+  [M in (typeof OPERATION_SCHEMA_METHOD)[McpOperation]]: (
     model: string,
-    opts?: { optionality: string },
-  ) => ModelSchema;
+    options?: { relationDepth?: number },
+  ) => ArgsSchema;
+} & {
+  makeProcedureArgsSchema: (procName: string) => ArgsSchema;
 };
+
+/**
+ * Maps every CRUD operation to the factory method building its full-args
+ * schema. The `*OrThrow` variants take the same args as their base operation
+ * and have no dedicated factory method.
+ */
+export const OPERATION_SCHEMA_METHOD = {
+  findUnique: "makeFindUniqueSchema",
+  findUniqueOrThrow: "makeFindUniqueSchema",
+  findFirst: "makeFindFirstSchema",
+  findFirstOrThrow: "makeFindFirstSchema",
+  findMany: "makeFindManySchema",
+  exists: "makeExistsSchema",
+  create: "makeCreateSchema",
+  createMany: "makeCreateManySchema",
+  createManyAndReturn: "makeCreateManyAndReturnSchema",
+  update: "makeUpdateSchema",
+  updateMany: "makeUpdateManySchema",
+  updateManyAndReturn: "makeUpdateManyAndReturnSchema",
+  upsert: "makeUpsertSchema",
+  delete: "makeDeleteSchema",
+  deleteMany: "makeDeleteManySchema",
+  count: "makeCountSchema",
+  aggregate: "makeAggregateSchema",
+  groupBy: "makeGroupBySchema",
+} as const satisfies Record<McpOperation, string>;
 
 export type ValidationResult =
   | { valid: true }
   | { valid: false; errors: string[] };
+
+export interface ValidateOptions {
+  requireWhereForBulk?: boolean;
+  /** Relation-nesting depth passed to the factory; omit for unlimited. */
+  relationDepth?: number;
+  /** Global cap on `take`; combined with the model's `limit` via `min`. */
+  maxTake?: number;
+}
+
+function formatIssues(issues: ZodIssue[]): string[] {
+  return issues.map((i) =>
+    i.path.length > 0 ? `${i.path.join(".")}: ${i.message}` : i.message,
+  );
+}
 
 export function validateOperation(
   models: McpModelDef[],
   model: string,
   operation: string,
   args: Record<string, unknown>,
-  zodFactory: ZodFactory,
-  requireWhereForBulk?: boolean,
+  factory: QuerySchemaFactory,
+  options: ValidateOptions = {},
 ): ValidationResult {
-  const errors: string[] = [];
-
   const modelDef = models.find((m) => m.name === model);
   if (!modelDef) {
     return {
@@ -106,8 +95,10 @@ export function validateOperation(
     };
   }
 
+  const errors: string[] = [];
+
   if (
-    requireWhereForBulk &&
+    options.requireWhereForBulk &&
     (operation === "deleteMany" ||
       operation === "updateMany" ||
       operation === "updateManyAndReturn")
@@ -125,151 +116,35 @@ export function validateOperation(
     }
   }
 
-  // Structural shape validation (correct keys, primitive types)
-  const structSchema = ARG_STRUCT_SCHEMAS[operation as McpOperation];
-  if (structSchema) {
-    const structResult = structSchema.safeParse(args);
-    if (!structResult.success) {
-      errors.push(...formatIssues(structResult.error.issues as ZodIssue[]));
+  // Cap `take` at min(@@mcp(limit: N), maxTake) when the caller provides one.
+  const caps = [modelDef.limit, options.maxTake].filter(
+    (c): c is number => typeof c === "number",
+  );
+  if (caps.length > 0 && typeof args.take === "number") {
+    const cap = Math.min(...caps);
+    if (args.take > cap) {
+      errors.push(`take: must not exceed ${cap} for "${model}"`);
     }
   }
 
-  const { fields } = modelDef;
-
-  // Field-level where validation
-  switch (operation as McpOperation) {
-    case "findUnique":
-    case "findUniqueOrThrow":
-    case "update":
-    case "upsert":
-    case "delete":
-      if ("where" in args && args.where !== undefined) {
-        validateData(
-          buildWhereUniqueSchema(model, fields) as ModelSchema,
-          args.where,
-          "where",
-          errors,
-        );
-      }
-      break;
-    case "findFirst":
-    case "findFirstOrThrow":
-    case "findMany":
-    case "updateMany":
-    case "updateManyAndReturn":
-    case "deleteMany":
-    case "count":
-    case "exists":
-    case "aggregate":
-    case "groupBy":
-      if ("where" in args && args.where !== undefined) {
-        validateData(
-          buildWhereSchema(model, fields) as ModelSchema,
-          args.where,
-          "where",
-          errors,
-        );
-      }
-      break;
-  }
-
-  // Field-level orderBy validation (read + analytical ops that accept ordering)
-  const ORDER_BY_OPS: McpOperation[] = [
-    "findFirst",
-    "findFirstOrThrow",
-    "findMany",
-    "aggregate",
-    "groupBy",
-  ];
-  if (
-    ORDER_BY_OPS.includes(operation as McpOperation) &&
-    "orderBy" in args &&
-    args.orderBy !== undefined
-  ) {
-    validateData(
-      buildOrderBySchema(model, fields) as ModelSchema,
-      args.orderBy,
-      "orderBy",
-      errors,
-    );
-  }
-
-  // Field-level cursor validation (find ops that page by cursor)
-  const CURSOR_OPS: McpOperation[] = [
-    "findFirst",
-    "findFirstOrThrow",
-    "findMany",
-  ];
-  if (
-    CURSOR_OPS.includes(operation as McpOperation) &&
-    "cursor" in args &&
-    args.cursor !== undefined
-  ) {
-    validateData(
-      buildWhereUniqueSchema(model, fields) as ModelSchema,
-      args.cursor,
-      "cursor",
-      errors,
-    );
-  }
-
-  // Field-level data validation
+  // Full-args validation via the ORM's own query schema (strict: unknown keys
+  // are rejected; where/select/include/orderBy/cursor/data are all covered).
+  const method = OPERATION_SCHEMA_METHOD[operation as McpOperation];
+  const factoryOptions =
+    options.relationDepth !== undefined && Number.isFinite(options.relationDepth)
+      ? { relationDepth: options.relationDepth }
+      : undefined;
   try {
-    switch (operation as McpOperation) {
-      case "create":
-        if ("data" in args) {
-          validateData(
-            zodFactory.makeModelSchema(model, { optionality: "defaults" }),
-            args.data,
-            "data",
-            errors,
-          );
-        }
-        break;
-      case "createMany":
-      case "createManyAndReturn":
-        if (Array.isArray(args.data)) {
-          const schema = zodFactory.makeModelSchema(model, {
-            optionality: "defaults",
-          });
-          args.data.forEach((item: unknown, i: number) =>
-            validateData(schema, item, `data[${i}]`, errors),
-          );
-        }
-        break;
-      case "update":
-      case "updateMany":
-      case "updateManyAndReturn":
-        if ("data" in args) {
-          validateData(
-            zodFactory.makeModelSchema(model, { optionality: "all" }),
-            args.data,
-            "data",
-            errors,
-          );
-        }
-        break;
-      case "upsert":
-        if ("create" in args) {
-          validateData(
-            zodFactory.makeModelSchema(model, { optionality: "defaults" }),
-            args.create,
-            "create",
-            errors,
-          );
-        }
-        if ("update" in args) {
-          validateData(
-            zodFactory.makeModelSchema(model, { optionality: "all" }),
-            args.update,
-            "update",
-            errors,
-          );
-        }
-        break;
+    const schema = factory[method](model, factoryOptions);
+    const result = schema.safeParse(args);
+    if (!result.success && result.error) {
+      errors.push(...formatIssues(result.error.issues));
     }
-  } catch {
-    // makeModelSchema may not support all model names at type level — skip
+  } catch (err) {
+    // Schema construction itself failed (e.g. a model without unique fields
+    // for a unique operation) — surface it instead of skipping validation.
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push(`Cannot validate "${operation}" on "${model}": ${message}`);
   }
 
   return errors.length === 0 ? { valid: true } : { valid: false, errors };

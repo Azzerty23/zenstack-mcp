@@ -1,6 +1,8 @@
 // Declares the @@mcp attribute for per-model MCP exposure control.
 // Usage:
-//   model Secret { ... @@mcp(false) }  // hide this model
-//   model User   { ... @@mcp }         // force-expose (overrides plugin expose=false)
+//   model Secret { ... @@mcp(false) }           // hide this model
+//   model User   { ... @@mcp }                  // force-expose (overrides plugin expose=false)
+//   model Post   { ... @@mcp(limit: 100) }      // cap `take` at 100 for list reads
+//   model Log    { ... @@mcp(true, limit: 50) } // force-expose + cap
 
-attribute @@mcp(_ expose: Boolean?)
+attribute @@mcp(_ expose: Boolean?, limit: Int?)
