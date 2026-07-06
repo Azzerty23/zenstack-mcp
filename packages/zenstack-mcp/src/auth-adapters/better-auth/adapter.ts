@@ -447,3 +447,15 @@ export function betterAuthMcpAdapter(
     },
   };
 }
+
+// Public re-exports for hosts that need to mint or verify access tokens
+// themselves (e.g. a server-side agent calling its own /mcp endpoint on behalf
+// of an already-authenticated user). Tokens minted with `signAccessToken` must
+// carry `exp` in epoch milliseconds and `aud` set to the adapter's canonical
+// resource (defaults to the better-auth `baseURL`) or `validateToken` rejects
+// them.
+export {
+  signAccessToken,
+  verifyAccessToken,
+  type AccessTokenPayload,
+} from "./stateless.js";
