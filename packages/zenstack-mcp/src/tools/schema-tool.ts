@@ -1,6 +1,12 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { z } from 'zod'
-import type { McpModelDef, McpOperation, McpProcedureDef } from '../types.js'
+import type {
+  McpEnumDef,
+  McpModelDef,
+  McpOperation,
+  McpProcedureDef,
+  McpTypeDef,
+} from '../types.js'
 import { renderSchema } from './schema-renderer.js'
 import { OPERATION_SCHEMA_METHOD, type QuerySchemaFactory } from './validate.js'
 
@@ -93,10 +99,13 @@ export function registerSchemaTool(
   procedures: McpProcedureDef[] = [],
   factory?: QuerySchemaFactory,
   relationDepth?: number,
+  enums: McpEnumDef[] = [],
+  typeDefs: McpTypeDef[] = [],
 ): void {
   server.registerTool('schema', {
     description:
-      'Returns the exposed schema as concise ZModel/Prisma-style text: model blocks with their fields ' +
+      'Returns the exposed schema as concise ZModel/Prisma-style text: enums, `type` declarations, ' +
+      'model blocks with their fields and attributes ' +
       '(queried via the `execute` tool) and any custom procedures (invoked via the `procedure` tool), ' +
       'followed by a reference of operation arguments with examples. ' +
       'Call this first to understand what data you can query, what procedures you can invoke, and how to structure arguments. ' +
@@ -159,7 +168,7 @@ export function registerSchemaTool(
       }
     }
 
-    const text = `${renderSchema(filtered, procedures)}\n\n${renderOperationDocs()}`
+    const text = `${renderSchema(filtered, procedures, enums, typeDefs)}\n\n${renderOperationDocs()}`
     return {
       content: [{ type: 'text', text }],
     }

@@ -1,17 +1,30 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { createQuerySchemaFactory } from "@zenstackhq/orm";
-import type { McpModelDef, McpProcedureDef, McpServerConfig } from "./types.js";
+import type {
+  McpEnumDef,
+  McpModelDef,
+  McpProcedureDef,
+  McpServerConfig,
+  McpTypeDef,
+} from "./types.js";
 import { ALL_OPERATIONS } from "./types.js";
 import { registerSchemaTool } from "./tools/schema-tool.js";
 import { registerExecuteTool } from "./tools/execute-tool.js";
 import { registerProcedureTool } from "./tools/procedure-tool.js";
 import { registerMeTool } from "./tools/me-tool.js";
 import type { QuerySchemaFactory } from "./tools/validate.js";
-import type { SchemaDef } from "@zenstackhq/schema";
+import type { AttributeApplication, SchemaDef } from "@zenstackhq/schema";
 
-type RawAttributeArg = {
-  name?: string;
-  value: { kind: string; value?: string | number | boolean };
+type RawAttributes = readonly AttributeApplication[];
+
+type RawFieldDef = {
+  type: string;
+  id?: boolean;
+  unique?: boolean;
+  optional?: boolean;
+  array?: boolean;
+  relation?: object;
+  attributes?: RawAttributes;
 };
 
 type RawSchemaDef = {
@@ -19,21 +32,24 @@ type RawSchemaDef = {
     string,
     {
       name: string;
-      fields: Record<
-        string,
-        {
-          type: string;
-          id?: boolean;
-          unique?: boolean;
-          optional?: boolean;
-          array?: boolean;
-          relation?: object;
-        }
-      >;
-      attributes?: ReadonlyArray<{
-        name: string;
-        args?: ReadonlyArray<RawAttributeArg>;
-      }>;
+      fields: Record<string, RawFieldDef>;
+      attributes?: RawAttributes;
+    }
+  >;
+  enums?: Record<
+    string,
+    {
+      name: string;
+      values: Record<string, string>;
+      attributes?: RawAttributes;
+    }
+  >;
+  typeDefs?: Record<
+    string,
+    {
+      name: string;
+      fields: Record<string, RawFieldDef>;
+      attributes?: RawAttributes;
     }
   >;
   procedures?: Record<
@@ -49,6 +65,21 @@ type RawSchemaDef = {
     }
   >;
 };
+
+/** Maps a raw field def to the structural `McpFieldDef` shared by the schema,
+ *  execute and validate tools. Used for both model and type-def fields. */
+function toFieldDef(fieldName: string, fieldDef: RawFieldDef) {
+  return {
+    name: fieldName,
+    type: fieldDef.type,
+    isId: fieldDef.id ?? false,
+    isUnique: fieldDef.unique ?? false,
+    isRequired: !(fieldDef.optional ?? false),
+    isList: fieldDef.array ?? false,
+    isRelation: !!fieldDef.relation,
+    ...(fieldDef.attributes ? { attributes: fieldDef.attributes } : {}),
+  };
+}
 
 /**
  * Reads the `@@map` attribute value from a raw model def (= DB table name).
@@ -89,16 +120,8 @@ export function extractModels<Schema extends SchemaDef>(
   assertRawSchema(raw);
 
   const allModels = Object.entries(raw.models).map(([name, modelDef]) => {
-    const fields = Object.entries(modelDef.fields).map(
-      ([fieldName, fieldDef]) => ({
-        name: fieldName,
-        type: fieldDef.type,
-        isId: fieldDef.id ?? false,
-        isUnique: fieldDef.unique ?? false,
-        isRequired: !(fieldDef.optional ?? false),
-        isList: fieldDef.array ?? false,
-        isRelation: !!fieldDef.relation,
-      }),
+    const fields = Object.entries(modelDef.fields).map(([fieldName, fieldDef]) =>
+      toFieldDef(fieldName, fieldDef),
     );
     const mapName = getModelMapName(modelDef);
     return {
@@ -109,6 +132,7 @@ export function extractModels<Schema extends SchemaDef>(
       ...(mapName !== undefined ? { mapName } : {}),
       operations: [...ALL_OPERATIONS],
       fields,
+      ...(modelDef.attributes ? { attributes: modelDef.attributes } : {}),
     } satisfies McpModelDef;
   });
 
@@ -170,6 +194,43 @@ export function extractProcedures<Schema extends SchemaDef>(
   return all.filter((p) => procCfg[p.name]?.exposed === true);
 }
 
+/**
+ * Reads enum declarations from the generated schema. Enums carry no access
+ * policies and are global type definitions referenced by model/type fields, so
+ * they are surfaced in full (no exposure filtering) — the `schema` tool needs
+ * them to explain the allowed values of enum-typed fields.
+ */
+export function extractEnums<Schema extends SchemaDef>(
+  config: McpServerConfig<Schema>,
+): McpEnumDef[] {
+  const raw = config.schema as unknown as RawSchemaDef;
+  if (!raw.enums) return [];
+  return Object.entries(raw.enums).map(([name, def]) => ({
+    name,
+    values: Object.keys(def.values ?? {}),
+    ...(def.attributes ? { attributes: def.attributes } : {}),
+  } satisfies McpEnumDef));
+}
+
+/**
+ * Reads `type` declarations (reusable structural types, e.g. for typed JSON
+ * fields) from the generated schema. Like enums, these are global definitions
+ * without policies and are surfaced in full.
+ */
+export function extractTypeDefs<Schema extends SchemaDef>(
+  config: McpServerConfig<Schema>,
+): McpTypeDef[] {
+  const raw = config.schema as unknown as RawSchemaDef;
+  if (!raw.typeDefs) return [];
+  return Object.entries(raw.typeDefs).map(([name, def]) => ({
+    name,
+    fields: Object.entries(def.fields ?? {}).map(([fieldName, fieldDef]) =>
+      toFieldDef(fieldName, fieldDef),
+    ),
+    ...(def.attributes ? { attributes: def.attributes } : {}),
+  } satisfies McpTypeDef));
+}
+
 // The factory caches the zod schemas it builds internally, but buildMcpServer
 // runs on every request in the stateless HTTP adapters — memoize per schema
 // object so the cache actually survives across requests.
@@ -195,13 +256,15 @@ export function buildMcpServer<Schema extends SchemaDef>(
   });
 
   const procedures = extractProcedures(config);
+  const enums = extractEnums(config);
+  const typeDefs = extractTypeDefs(config);
   const validateOptions = {
     requireWhereForBulk: config.requireWhereForBulk,
     relationDepth: config.relationDepth ?? 2,
     maxTake: config.maxTake,
   };
 
-  registerSchemaTool(server, models, procedures, factory, validateOptions.relationDepth);
+  registerSchemaTool(server, models, procedures, factory, validateOptions.relationDepth, enums, typeDefs);
   registerMeTool(server);
   registerExecuteTool(server, models, config.getClient, factory, validateOptions);
 

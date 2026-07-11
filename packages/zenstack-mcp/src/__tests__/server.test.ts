@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { extractModels } from "../server.js";
+import { extractEnums, extractModels, extractTypeDefs } from "../server.js";
 import type { McpServerConfig } from "../types.js";
 import type { SchemaDef } from "@zenstackhq/schema";
 
@@ -237,5 +237,64 @@ describe("extractModels — modelOperations override", () => {
     }));
     const user = models.find((m) => m.name === "User")!;
     expect(user.operations).toEqual(["count"]);
+  });
+});
+
+describe("extractModels — attributes", () => {
+  test("carries field- and model-level attributes through", () => {
+    const schema = makeSchema({
+      Post: {
+        name: "Post",
+        fields: {
+          id: { type: "String", id: true, attributes: [{ name: "@id" }] },
+        },
+        attributes: [{ name: "@@map", args: [{ value: { kind: "literal", value: "posts" } }] }],
+      },
+    });
+    const post = extractModels(config({ schema })).find((m) => m.name === "Post")!;
+    expect(post.attributes).toEqual([{ name: "@@map", args: [{ value: { kind: "literal", value: "posts" } }] }] as never);
+    expect(post.fields[0]!.attributes).toEqual([{ name: "@id" }] as never);
+  });
+});
+
+describe("extractEnums", () => {
+  test("returns [] when the schema has no enums", () => {
+    const schema = makeSchema({ User: userModel });
+    expect(extractEnums(config({ schema }))).toEqual([]);
+  });
+
+  test("extracts enum names and member values", () => {
+    const schema = {
+      models: { User: userModel },
+      enums: { Role: { name: "Role", values: { USER: "USER", ADMIN: "ADMIN" } } },
+    } as unknown as SchemaDef;
+    const enums = extractEnums(config({ schema }));
+    expect(enums).toHaveLength(1);
+    expect(enums[0]!.name).toBe("Role");
+    expect(enums[0]!.values).toEqual(["USER", "ADMIN"]);
+  });
+});
+
+describe("extractTypeDefs", () => {
+  test("returns [] when the schema has no type declarations", () => {
+    const schema = makeSchema({ User: userModel });
+    expect(extractTypeDefs(config({ schema }))).toEqual([]);
+  });
+
+  test("extracts type declarations with their fields", () => {
+    const schema = {
+      models: { User: userModel },
+      typeDefs: {
+        Address: {
+          name: "Address",
+          fields: { street: { type: "String" }, zip: { type: "String", optional: true } },
+        },
+      },
+    } as unknown as SchemaDef;
+    const typeDefs = extractTypeDefs(config({ schema }));
+    expect(typeDefs).toHaveLength(1);
+    expect(typeDefs[0]!.name).toBe("Address");
+    expect(typeDefs[0]!.fields.map((f) => f.name)).toEqual(["street", "zip"]);
+    expect(typeDefs[0]!.fields[1]!.isRequired).toBe(false);
   });
 });

@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { SchemaDef } from "@zenstackhq/schema";
+import type { AttributeApplication, SchemaDef } from "@zenstackhq/schema";
 import { AllCrudOperations } from "@zenstackhq/orm";
 import type { AuthType } from "@zenstackhq/orm";
 
@@ -24,6 +24,10 @@ export interface McpFieldDef {
   isRequired: boolean;
   isList: boolean;
   isRelation: boolean;
+  /** ZModel attributes applied to the field (`@id`, `@default`, `@relation`, `@map`, …),
+   *  carried verbatim from the generated schema so the `schema` tool can render them.
+   *  Policy attributes (`@allow`/`@deny`) are stripped by the renderer. */
+  attributes?: readonly AttributeApplication[];
 }
 
 export interface McpModelDef {
@@ -36,9 +40,30 @@ export interface McpModelDef {
   mapName?: string;
   operations: McpOperation[];
   fields: McpFieldDef[];
+  /** Model-level ZModel attributes (`@@map`, `@@index`, `@@unique`, `@@mcp`, …),
+   *  carried verbatim from the generated schema. Policy attributes
+   *  (`@@allow`/`@@deny`) are stripped by the renderer. */
+  attributes?: readonly AttributeApplication[];
   /** Per-model cap on `take` (from `@@mcp(limit: N)`); the effective cap is
    *  min(limit, McpServerConfig.maxTake). */
   limit?: number;
+}
+
+/** An enum declared in the ZModel schema (e.g. `enum Role { USER ADMIN }`). */
+export interface McpEnumDef {
+  name: string;
+  /** Enum member names, in declaration order. */
+  values: string[];
+  /** Enum-level attributes (e.g. `@@map`). */
+  attributes?: readonly AttributeApplication[];
+}
+
+/** A type declaration in the ZModel schema (`type Address { ... }`) — a reusable
+ *  structural type used for typed JSON fields and procedure params. */
+export interface McpTypeDef {
+  name: string;
+  fields: McpFieldDef[];
+  attributes?: readonly AttributeApplication[];
 }
 
 /** A single parameter of a custom ZenStack procedure. */
