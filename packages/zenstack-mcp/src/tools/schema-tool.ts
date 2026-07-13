@@ -7,8 +7,23 @@ import type {
   McpProcedureDef,
   McpTypeDef,
 } from '../types.js'
+import {
+  getComponentDocument,
+  getOperationDocument,
+  knownDefinitions,
+  sliceDocument,
+  toCompactJSONSchema,
+} from './json-schema.js'
 import { renderSchema } from './schema-renderer.js'
 import { OPERATION_SCHEMA_METHOD, type QuerySchemaFactory } from './validate.js'
+
+/**
+ * Cap on the `depth` arg for self-contained documents: each extra level
+ * multiplies the document size (relation cycles re-expand every model's
+ * filters), so deep bounded docs get huge — beyond this, the default
+ * progressive (`$ref`-based) document is strictly better.
+ */
+const MAX_DOC_DEPTH = 5
 
 const OPERATION_DOCS: Record<string, { description: string; example: unknown }> = {
   findMany: {
@@ -110,12 +125,50 @@ export function registerSchemaTool(
       'followed by a reference of operation arguments with examples. ' +
       'Call this first to understand what data you can query, what procedures you can invoke, and how to structure arguments. ' +
       'Pass a model name to retrieve schema for a single model only. ' +
-      'Pass both model and operation to get the exact JSON Schema of the `execute` args for that operation.',
+      'Pass both model and operation to get the exact JSON Schema of the `execute` args for that operation: ' +
+      'shared shapes are named `$defs` referenced by `$ref`; definitions that did not fit the response are listed in `pendingDefinitions` and can be fetched individually via `component`.',
     inputSchema: {
       model: z.string().optional().describe('Filter to a single model by name (PascalCase). Omit to return all models. Does not affect the returned procedures.'),
       operation: z.string().optional().describe('With model: return the exact JSON Schema of the `execute` args for this operation (e.g. "findMany").'),
+      component: z.string().optional().describe('Fetch one named schema definition (a `$defs` name seen in a `$ref` or `pendingDefinitions` of a previous response, e.g. "UserWhereInput"). Takes precedence over the other arguments.'),
+      depth: z.number().int().min(0).optional().describe(`With model and operation: return a SELF-CONTAINED schema with relations expanded only to this depth (max ${MAX_DOC_DEPTH}), instead of the default \`$ref\`-based document. \`execute\` accepts and validates deeper nesting than what is documented. Each extra level multiplies the response size.`),
     },
-  }, async ({ model, operation }) => {
+  }, async ({ model, operation, component, depth }) => {
+    const validationDepth = relationDepth !== undefined && Number.isFinite(relationDepth)
+      ? relationDepth
+      : undefined
+
+    if (component) {
+      if (!factory) {
+        return { content: [{ type: 'text', text: JSON.stringify({ error: 'Operation schemas are not available on this server.' }) }], isError: true }
+      }
+      const sliced = getComponentDocument(factory, models, component, validationDepth)
+      if (!sliced) {
+        const known = knownDefinitions(factory, validationDepth)
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              error: `Unknown definition "${component}". Use a $defs name from a previous schema response.`,
+              ...(known.length > 0 ? { knownDefinitions: known } : {}),
+            }),
+          }],
+          isError: true,
+        }
+      }
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            component,
+            schema: sliced.schema,
+            ...(sliced.pending.length > 0
+              ? { pendingDefinitions: sliced.pending, hint: 'Fetch any pending definition with {"component": "<name>"}.' }
+              : {}),
+          }),
+        }],
+      }
+    }
     const filtered = model
       ? models.filter((m) => m.name === model)
       : models
@@ -149,15 +202,36 @@ export function registerSchemaTool(
       }
 
       try {
-        const opts = relationDepth !== undefined && Number.isFinite(relationDepth)
-          ? { relationDepth }
-          : undefined
-        const schema = factory![method](model!, opts)
-        // `unrepresentable: 'any'` maps JSON-Schema-less types (Date, custom
-        // scalars like Decimal/Bytes) to `{}` instead of throwing.
-        const jsonSchema = z.toJSONSchema(schema as unknown as z.ZodType, { io: 'input', unrepresentable: 'any' })
+        if (depth !== undefined) {
+          // Self-contained document, bounded: capped by the validation depth
+          // (documenting deeper than `execute` validates would advertise args
+          // it rejects), then by MAX_DOC_DEPTH (size grows multiplicatively).
+          const docDepth = Math.min(depth, validationDepth ?? MAX_DOC_DEPTH)
+          const schema = factory![method](model!, { relationDepth: docDepth })
+          const jsonSchema = toCompactJSONSchema(schema, factory!)
+          return {
+            content: [{ type: 'text', text: JSON.stringify({ model, operation, relationDepth: docDepth, argsSchema: jsonSchema }) }],
+          }
+        }
+
+        // Default: progressive document at the validation depth (unlimited
+        // unless the server bounds it) — small root plus budgeted `$defs`,
+        // the rest fetchable one by one via `component`.
+        const doc = getOperationDocument(factory!, method, model!, validationDepth)
+        const { schema: argsSchema, pending } = sliceDocument(doc)
         return {
-          content: [{ type: 'text', text: JSON.stringify({ model, operation, argsSchema: jsonSchema }) }],
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              model,
+              operation,
+              relationDepth: validationDepth ?? 'unlimited',
+              argsSchema,
+              ...(pending.length > 0
+                ? { pendingDefinitions: pending, hint: 'Fetch any pending definition with {"component": "<name>"}.' }
+                : {}),
+            }),
+          }],
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)

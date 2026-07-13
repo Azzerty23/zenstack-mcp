@@ -321,11 +321,12 @@ export interface McpServerConfig<Schema extends SchemaDef> {
   /**
    * Maximum relation-nesting depth accepted in operation args (where/select/
    * include/data). Passed to the ORM's query schema factory; args nesting
-   * deeper than this are rejected at validation time. Keeping it low also
-   * keeps the JSON schemas returned by the `schema` tool small enough for LLM
-   * context windows.
+   * deeper than this are rejected at validation time. Also bounds the depth
+   * documented by the `schema` tool.
    *
-   * Defaults to `2`. Set to `Infinity` for unlimited depth (the ORM default).
+   * Defaults to unlimited (the ORM default): the factory builds truly
+   * recursive schemas, so arbitrarily nested args validate. Set a finite
+   * depth to restore the guardrail against deeply nested (expensive) queries.
    */
   relationDepth?: number;
   /**

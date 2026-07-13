@@ -260,7 +260,7 @@ export function buildMcpServer<Schema extends SchemaDef>(
   const typeDefs = extractTypeDefs(config);
   const validateOptions = {
     requireWhereForBulk: config.requireWhereForBulk,
-    relationDepth: config.relationDepth ?? 2,
+    relationDepth: config.relationDepth,
     maxTake: config.maxTake,
   };
 

@@ -149,7 +149,7 @@ The server exposes these tools to connected AI clients:
 
 | Tool | Description |
 |------|-------------|
-| `schema` | Returns the exposed schema as concise ZModel/Prisma-style text — model blocks with their fields and any custom procedures — so the AI understands your data model with minimal token overhead. Pass `model` + `operation` to get the exact JSON Schema of the `execute` args for that operation |
+| `schema` | Returns the exposed schema as concise ZModel/Prisma-style text — model blocks with their fields and any custom procedures — so the AI understands your data model with minimal token overhead. Pass `model` + `operation` to get the exact JSON Schema of the `execute` args for that operation, disclosed progressively: shared shapes are named `$defs` referenced by `$ref`, definitions that don't fit the response are listed in `pendingDefinitions`, and each can be fetched individually via `component`. Pass `depth` instead for a self-contained document bounded to that relation depth |
 | `execute` | Runs a Prisma-compatible query through your policy-enforced client — access-control policies are validated automatically before execution |
 | `procedure` | Invokes a custom ZenStack procedure (`$procs`) through your policy-enforced client. Only registered when the schema declares procedures |
 | `me` | Returns the authenticated user for the current request |
@@ -165,8 +165,9 @@ Arguments are validated with ZenStack's own query schemas
 (`createQuerySchemaFactory` from `@zenstackhq/orm`) before reaching the client:
 `where`/`select`/`include`/`orderBy`/`cursor`/`data` are all checked (strictly —
 unknown keys are rejected), enum values and compound `@@unique` keys are
-understood, and `@validate` attribute rules apply. Relation nesting is bounded
-by `relationDepth` (default 2) and list reads by `maxTake`/`@@mcp(limit: N)`.
+understood, and `@validate` attribute rules apply. Relation nesting is
+unbounded by default (the schemas are truly recursive); bound it with
+`relationDepth`, and cap list reads with `maxTake`/`@@mcp(limit: N)`.
 
 ## API Reference
 
@@ -250,7 +251,7 @@ the database can return:
 |--------|----------------|
 | `requireWhereForBulk: true` | Enable in production — rejects `deleteMany`/`updateMany` with an empty `where`, so an LLM can't wipe a whole table. |
 | `maxTake` / `@@mcp(limit: N)` | Cap `take` on list reads globally (`maxTake`) and per model (`@@mcp(limit: N)`); the lower of the two wins. Note the cap applies when a `take` is provided — pair it with policies that keep result sets bounded. |
-| `relationDepth` | Maximum relation-nesting depth accepted in `where`/`select`/`include`/`data` (default **2**). Deeper args are rejected at validation time; raise it (or set `Infinity`) if your clients legitimately need deeper queries. |
+| `relationDepth` | Maximum relation-nesting depth accepted in `where`/`select`/`include`/`data` (default **unlimited** — validation schemas are truly recursive). Set a finite depth to reject deeply nested args at validation time, as a guardrail against expensive queries; it also bounds the depth documented by the `schema` tool. |
 | `initialAccessToken` | Set for the built-in OAuth server — otherwise `/register` is open to anyone. Registered clients also expire after `clientTtl` (default 24h) to prevent registry exhaustion. |
 | `allowedOrigins` | Set when the server may be reached from a browser — rejects requests from any other `Origin` (DNS-rebinding protection). Native clients send no `Origin` and are unaffected. |
 | `jwtSecret` / better-auth `secret` | Must be ≥ 32 characters (enforced). Use a high-entropy random value. |
